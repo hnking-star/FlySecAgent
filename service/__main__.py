@@ -3,6 +3,7 @@
 Task 1：读配置、建 data 目录、生成/读取服务级 token。
 Task 2：首启建表 + 启动时对账 pending_window_end。
 Task 3：起 HTTP 服务，绑定 127.0.0.1。
+Task 6：启用 lifespan 把 Scheduler + PiRunner 跑起来。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ def main() -> None:
         f"[flysec] data_dir={cfg.data_dir} port={cfg.port} "
         f"token_fp={token[:8]} recovered={recovered}"
     )
-    app = create_app(cfg)
+    app = create_app(cfg, start_background=True)
     uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_config=None)
 
 

@@ -1,7 +1,6 @@
 """FastAPI 应用工厂 + 鉴权中间件 + 身份注入 + 请求日志。
 
-本任务（Task 3）只提供 /health 和若干 stub 路由验证中间件工作。
-业务路由由 Task 4-10 填充。
+本文件也负责在 lifespan 里启动/停止 Scheduler + PiRunner。
 """
 
 from __future__ import annotations
@@ -9,6 +8,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException, Request
@@ -25,7 +25,9 @@ from .errors import (
     unhandled_exception_handler,
     validation_exception_handler,
 )
+from .pi_runner import PiRunner
 from .request_log import log_request, setup_logging
+from .scheduler import Scheduler
 
 
 VERSION = "0.1.0"
@@ -43,13 +45,32 @@ _SESSION_TOKEN_PREFIXES = ("/observer/",)
 _PUBLIC_PATHS = {"/health"}
 
 
-def create_app(cfg=None) -> FastAPI:
+def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
     cfg = cfg or load_config()
     service_token = ensure_service_token(cfg.data_dir)
     registry = TokenRegistry()
     setup_logging()
 
-    app = FastAPI(title="FlySecAgent", version=VERSION)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Scheduler + PiRunner 延迟到有真实请求前初始化；测试时也能用。
+        pi_runner = PiRunner(
+            api_base=f"http://127.0.0.1:{cfg.port}" if cfg.port else "http://127.0.0.1:0",
+            token_registry=registry,
+            on_run_done=_make_run_done_handler(app),
+        )
+        scheduler = Scheduler(dispatcher=pi_runner.dispatch)
+        app.state.pi_runner = pi_runner
+        app.state.scheduler = scheduler
+        if start_background:
+            await scheduler.start()
+        try:
+            yield
+        finally:
+            await scheduler.stop()
+            await pi_runner.stop_all()
+
+    app = FastAPI(title="FlySecAgent", version=VERSION, lifespan=lifespan)
     app.state.cfg = cfg
     app.state.service_token = service_token
     app.state.token_registry = registry
@@ -71,6 +92,17 @@ def create_app(cfg=None) -> FastAPI:
     return app
 
 
+def _make_run_done_handler(app: FastAPI):
+    async def handler(session_id: str, msg: dict) -> None:
+        scheduler: Scheduler = app.state.scheduler
+        if msg.get("ok"):
+            await scheduler.pi_run_done(session_id)
+        else:
+            await scheduler.pi_run_failed(session_id)
+
+    return handler
+
+
 def _register_health(app: FastAPI) -> None:
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -79,10 +111,11 @@ def _register_health(app: FastAPI) -> None:
 
 def _register_routers(app: FastAPI) -> None:
     """挂真正的业务 router。"""
-    from .routers import hook, observer
+    from .routers import control, hook, observer
 
     app.include_router(hook.router)
     app.include_router(observer.router)
+    app.include_router(control.router)
     app.state.submit_cache = observer.SubmitCache()
 
 

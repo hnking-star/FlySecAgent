@@ -26,4 +26,6 @@ async def client(cfg) -> AsyncIterator[tuple[AsyncClient, "FastAPI"]]:
     app = create_app(cfg)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
-        yield c, app
+        # 触发 lifespan startup（通过一次健康请求唤醒 ASGI）
+        async with app.router.lifespan_context(app):
+            yield c, app
