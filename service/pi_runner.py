@@ -2,6 +2,10 @@
 
 每个 session_id 一个子进程，内部用 asyncio.subprocess。
 崩溃自动重启（指数退避），超过 5 次放弃。
+
+默认启动真 Pi 扩展（pi_ext/dist/index.js）；若 dist 不存在则回退到
+service.pi_stub 占位实现，便于 CI / 无 Node 环境运行。可通过
+环境变量 FLYSEC_PI_COMMAND 覆盖（空格分隔）。
 """
 
 from __future__ import annotations
@@ -10,9 +14,10 @@ import asyncio
 import json
 import logging
 import os
-import signal
+import shlex
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Awaitable, Callable
 
 from .auth import TokenRegistry
@@ -23,6 +28,16 @@ _pi_log = logging.getLogger("flysec.pi.stdio")
 MAX_RESTARTS = 5
 SHUTDOWN_GRACE_S = 2.0
 SIGTERM_GRACE_S = 1.0
+
+
+def _default_pi_command() -> list[str]:
+    override = os.environ.get("FLYSEC_PI_COMMAND")
+    if override:
+        return shlex.split(override)
+    entry = Path(__file__).resolve().parent.parent / "pi_ext" / "dist" / "index.js"
+    if entry.exists():
+        return ["node", str(entry)]
+    return [sys.executable, "-u", "-m", "service.pi_stub"]
 
 
 # 回调签名：PiRunner → Scheduler
@@ -51,7 +66,7 @@ class PiRunner:
         self._registry = token_registry
         self._on_run_done = on_run_done
         self._on_run_started = on_run_started
-        self._command = command or [sys.executable, "-u", "-m", "service.pi_stub"]
+        self._command = command if command is not None else _default_pi_command()
         self._handles: dict[str, _PiHandle] = {}
         self._supervisors: dict[str, asyncio.Task] = {}
         self._stop = asyncio.Event()
@@ -209,6 +224,7 @@ class PiRunner:
                 msg = json.loads(line.decode("utf-8"))
             except json.JSONDecodeError:
                 _pi_log.warning("session=%s invalid stdout: %r", session_id, line)
+                print(f"[pi:{session_id}] non-json stdout: {line!r}", flush=True)
                 continue
             op = msg.get("op")
             if op == "ready":
@@ -220,6 +236,7 @@ class PiRunner:
                 await self._on_run_started(session_id, msg)
                 continue
             if op == "run_done":
+                print(f"[pi:{session_id}] run_done: {msg}", flush=True)
                 await self._on_run_done(session_id, msg)
                 continue
             if op == "log":
@@ -233,9 +250,9 @@ class PiRunner:
             line = await stderr.readline()
             if not line:
                 return
-            _pi_log.warning(
-                "session=%s pi stderr: %s", session_id, line.decode("utf-8", errors="replace").rstrip()
-            )
+            text = line.decode("utf-8", errors="replace").rstrip()
+            _pi_log.warning("session=%s pi stderr: %s", session_id, text)
+            print(f"[pi:{session_id}] stderr: {text}", flush=True)
 
     async def _shutdown_handle(self, handle: _PiHandle) -> None:
         if handle.proc.returncode is not None:
