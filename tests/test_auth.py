@@ -86,6 +86,9 @@ async def test_observer_requires_session_token(client):
 
 @pytest.mark.asyncio
 async def test_observer_valid_session_token(client):
+    """带正确会话级 token 能过中间件。
+    真实路由会走业务检查（本会话无 project → 404），说明鉴权没有拦下这条请求。
+    """
     c, app = client
     token = app.state.token_registry.issue("sess-42")
     r = await c.post(
@@ -93,10 +96,8 @@ async def test_observer_valid_session_token(client):
         headers={"X-FlySec-Token": token},
         json={"mode": "summary"},
     )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["stub"] == "observer.context"
-    assert body["session_id"] == "sess-42"
+    assert r.status_code == 404
+    assert r.json()["code"] == "session_not_found"
 
 
 # ---------- 端到端：身份注入 ----------

@@ -79,29 +79,15 @@ def _register_health(app: FastAPI) -> None:
 
 def _register_routers(app: FastAPI) -> None:
     """挂真正的业务 router。"""
-    from .routers import hook
+    from .routers import hook, observer
 
     app.include_router(hook.router)
+    app.include_router(observer.router)
+    app.state.submit_cache = observer.SubmitCache()
 
 
 def _register_stubs(app: FastAPI) -> None:
-    """observer / control 的 stub 路由；Task 5 / Task 10 替换。"""
-
-    @app.post("/observer/context")
-    async def observer_context_stub(request: Request) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "stub": "observer.context",
-            "session_id": request.state.session_id,
-        }
-
-    @app.post("/observer/submit")
-    async def observer_submit_stub(request: Request) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "stub": "observer.submit",
-            "session_id": request.state.session_id,
-        }
+    """control 的 stub 路由；Task 10 替换。"""
 
     @app.post("/control/health-stub")
     async def control_stub() -> dict[str, Any]:
