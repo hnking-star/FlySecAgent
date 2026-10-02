@@ -18,3 +18,7 @@ pi_ext/dist/
 .DS_Store
 
 docs/
+
+# Local Coco installation (absolute machine paths)
+.trae/hooks.json
+.trae/hooks.json.flysec-backup-*

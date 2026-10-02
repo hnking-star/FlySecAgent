@@ -30,7 +30,7 @@ def _conn(request: Request) -> sqlite3.Connection:
 
 def _require_project(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row:
     row = conn.execute(
-        "SELECT observation_enabled FROM projects WHERE session_id = ?",
+        "SELECT observation_enabled, observer_paused, agent_turn_active FROM projects WHERE session_id = ?",
         (session_id,),
     ).fetchone()
     if row is None:
@@ -61,8 +61,8 @@ async def agent_turn_begin(payload: _SessionBody, request: Request) -> dict[str,
 
     scheduler = request.app.state.scheduler
     pi_runner = request.app.state.pi_runner
-    await pi_runner.ensure_running(payload.session_id)
-    await scheduler.agent_turn_begin(payload.session_id)
+    if not row["observer_paused"]:
+        await scheduler.agent_turn_begin(payload.session_id)
     return {"ok": True}
 
 
@@ -70,7 +70,7 @@ async def agent_turn_begin(payload: _SessionBody, request: Request) -> dict[str,
 async def agent_turn_stop(payload: _SessionBody, request: Request) -> dict[str, Any]:
     conn = _conn(request)
     try:
-        _require_project(conn, payload.session_id)
+        row = _require_project(conn, payload.session_id)
         conn.execute(
             "UPDATE projects SET agent_turn_active = 0 WHERE session_id = ?",
             (payload.session_id,),
@@ -79,5 +79,6 @@ async def agent_turn_stop(payload: _SessionBody, request: Request) -> dict[str, 
         conn.close()
 
     scheduler = request.app.state.scheduler
-    await scheduler.agent_turn_stop(payload.session_id)
+    if row["observation_enabled"] and not row["observer_paused"] and row["agent_turn_active"]:
+        await scheduler.agent_turn_stop(payload.session_id)
     return {"ok": True}

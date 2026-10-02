@@ -1,0 +1,4 @@
+# Historical draft only; this file was never verified against Codex.
+# Do not copy it to ~/.codex/config.yaml.
+# Coco 0.121.1: use python -m hook.install_coco <workspace>.
+# See hook/README.md for the tested configuration and startup instructions.

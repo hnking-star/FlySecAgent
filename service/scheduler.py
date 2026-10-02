@@ -65,6 +65,7 @@ class Scheduler:
         self._lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
+        self._dispatch_tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -76,6 +77,9 @@ class Scheduler:
 
     async def stop(self) -> None:
         self._stop.set()
+        for task in self._dispatch_tasks:
+            task.cancel()
+        await asyncio.gather(*self._dispatch_tasks, return_exceptions=True)
         if self._loop_task is not None:
             self._loop_task.cancel()
             try:
@@ -92,6 +96,8 @@ class Scheduler:
         async with self._lock:
             state = self._ensure(session_id)
             if not state.observation_enabled or state.observer_paused:
+                return
+            if state.agent_turn_active:
                 return
             state.agent_turn_active = True
             state.next_timer_fire_at = self._clock() + self._interval
@@ -167,6 +173,8 @@ class Scheduler:
     async def _maybe_dispatch(self, session_id: str) -> None:
         """没有在跑且有 pending → 下发给 Pi。"""
         async with self._lock:
+            if self._stop.is_set():
+                return
             state = self._sessions.get(session_id)
             if state is None:
                 return
@@ -179,6 +187,12 @@ class Scheduler:
                 return
             state.pending_trigger = None
             state.running = True
+        task = asyncio.create_task(self._dispatch(session_id, trigger))
+        self._dispatch_tasks.add(task)
+        task.add_done_callback(self._dispatch_tasks.discard)
+        await asyncio.sleep(0)
+
+    async def _dispatch(self, session_id: str, trigger: str) -> None:
         try:
             await self._dispatcher(session_id, trigger)
         except Exception as exc:

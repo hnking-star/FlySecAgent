@@ -37,7 +37,7 @@ def _default_pi_command() -> list[str]:
     entry = Path(__file__).resolve().parent.parent / "pi_ext" / "dist" / "index.js"
     if entry.exists():
         return ["node", str(entry)]
-    return [sys.executable, "-u", "-m", "service.pi_stub"]
+    raise RuntimeError("Pi extension is not built; run npm run build in pi_ext, or explicitly select the test stub")
 
 
 # 回调签名：PiRunner → Scheduler
@@ -61,11 +61,13 @@ class PiRunner:
         on_run_done: OnRunDone,
         on_run_started: Callable[[str, dict], Awaitable[None]] | None = None,
         command: list[str] | None = None,
+        on_ready: Callable[[str, dict], Awaitable[None]] | None = None,
     ) -> None:
         self._api_base = api_base
         self._registry = token_registry
         self._on_run_done = on_run_done
         self._on_run_started = on_run_started
+        self._on_ready = on_ready
         self._command = command if command is not None else _default_pi_command()
         self._handles: dict[str, _PiHandle] = {}
         self._supervisors: dict[str, asyncio.Task] = {}
@@ -80,7 +82,8 @@ class PiRunner:
     async def ensure_running(self, session_id: str) -> None:
         """为该 session 启一个 Pi 子进程（若未启）；supervisor 会自动重启。"""
         async with self._lock:
-            if session_id in self._supervisors:
+            current = self._supervisors.get(session_id)
+            if current is not None and not current.done():
                 return
             self._ready_evts[session_id] = asyncio.Event()
             task = asyncio.create_task(
@@ -169,8 +172,17 @@ class PiRunner:
                 self._read_stderr(session_id, handle), name=f"flysec-pi-stderr-{session_id}"
             )
 
-            rc = await handle.proc.wait()
-            await asyncio.gather(reader_task, err_task, return_exceptions=True)
+            try:
+                rc = await handle.proc.wait()
+                await asyncio.gather(reader_task, err_task, return_exceptions=True)
+            except asyncio.CancelledError:
+                await self._shutdown_handle(handle)
+                reader_task.cancel()
+                err_task.cancel()
+                await asyncio.gather(reader_task, err_task, return_exceptions=True)
+                raise
+            finally:
+                self._registry.revoke(session_id)
             self._handles.pop(session_id, None)
             ready = self._ready_evts.get(session_id)
             if ready is not None:
@@ -223,14 +235,16 @@ class PiRunner:
             try:
                 msg = json.loads(line.decode("utf-8"))
             except json.JSONDecodeError:
-                _pi_log.warning("session=%s invalid stdout: %r", session_id, line)
-                print(f"[pi:{session_id}] non-json stdout: {line!r}", flush=True)
+                _pi_log.warning("session=%s invalid RPC output", session_id)
+
                 continue
             op = msg.get("op")
             if op == "ready":
                 ready = self._ready_evts.get(session_id)
                 if ready is not None:
                     ready.set()
+                if self._on_ready is not None:
+                    await self._on_ready(session_id, msg)
                 continue
             if op == "run_started" and self._on_run_started is not None:
                 await self._on_run_started(session_id, msg)
@@ -252,7 +266,7 @@ class PiRunner:
                 return
             text = line.decode("utf-8", errors="replace").rstrip()
             _pi_log.warning("session=%s pi stderr: %s", session_id, text)
-            print(f"[pi:{session_id}] stderr: {text}", flush=True)
+
 
     async def _shutdown_handle(self, handle: _PiHandle) -> None:
         if handle.proc.returncode is not None:

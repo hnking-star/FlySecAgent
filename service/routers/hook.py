@@ -117,11 +117,13 @@ async def record_ingest(payload: RecordIngestInput, request: Request):
 
         if payload.call_key is not None:
             dup = conn.execute(
-                "SELECT id FROM tool_records "
+                "SELECT id, tool_name, tool_input_json, tool_response_json FROM tool_records "
                 "WHERE session_id = ? AND call_key = ?",
                 (payload.session_id, payload.call_key),
             ).fetchone()
             if dup is not None:
+                if (dup["tool_name"] != payload.tool_name or json.loads(dup["tool_input_json"]) != payload.tool_input or json.loads(dup["tool_response_json"]) != payload.tool_response):
+                    _raise(409, "call_key_conflict", "same call key has different tool evidence")
                 return RecordIngestOutput(record_id=int(dup["id"]))
 
         tool_input = json.dumps(payload.tool_input, ensure_ascii=False)
@@ -179,13 +181,15 @@ async def map_pending(session_id: str, request: Request):
             return MapPendingOutput()
 
         obs = conn.execute(
-            "SELECT state_json, map_text FROM observations WHERE id = ?",
-            (int(current),),
+            "SELECT state_json, map_text FROM observations WHERE id = ? AND session_id = ? AND status = 'published'",
+            (int(current), session_id),
         ).fetchone()
         if obs is None or obs["map_text"] is None:
             return MapPendingOutput()
 
         revision = _parse_revision(obs["state_json"])
+        if not revision or obs["map_text"] == "<observer-map/>":
+            return MapPendingOutput()
         return MapPendingOutput(revision=revision, map_text=obs["map_text"])
     finally:
         conn.close()

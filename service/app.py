@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response
 
 from . import observation
 from .auth import TokenRegistry, token_fingerprint
-from .bootstrap import ensure_service_token
+from .bootstrap import ensure_data_dir, ensure_service_token
 from .config import load_config
 from .db import connect, init_db
 from .errors import (
@@ -47,6 +47,7 @@ _PUBLIC_PATHS = {"/health"}
 
 def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
     cfg = cfg or load_config()
+    ensure_data_dir(cfg.data_dir)
     service_token = ensure_service_token(cfg.data_dir)
     registry = TokenRegistry()
     setup_logging()
@@ -54,12 +55,34 @@ def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Scheduler + PiRunner 延迟到有真实请求前初始化；测试时也能用。
+        async def pi_ready(sid: str, message: dict):
+            observer_sid = message.get("observer_session_id")
+            if observer_sid:
+                conn = connect(cfg.data_dir)
+                try:
+                    conn.execute("UPDATE projects SET observer_session_id=? WHERE session_id=?", (observer_sid, sid))
+                finally:
+                    conn.close()
         pi_runner = PiRunner(
             api_base=f"http://127.0.0.1:{cfg.port}" if cfg.port else "http://127.0.0.1:0",
             token_registry=registry,
             on_run_done=_make_run_done_handler(app),
+            on_ready=pi_ready,
         )
-        scheduler = Scheduler(dispatcher=pi_runner.dispatch)
+        async def dispatch(sid: str, trigger: str):
+            conn = connect(cfg.data_dir)
+            try:
+                row = conn.execute("SELECT observer_paused, observation_enabled FROM projects WHERE session_id=?", (sid,)).fetchone()
+                if not row or row["observer_paused"] or (not row["observation_enabled"] and trigger != "observation_close"):
+                    await app.state.scheduler.pi_run_failed(sid)
+                    return
+                obs_id = observation.start_observation(conn, sid, trigger)
+                app.state.active_observations[sid] = obs_id
+                app.state.submit_cache.clear_session(sid)
+            finally:
+                conn.close()
+            await pi_runner.dispatch(sid, trigger)
+        scheduler = Scheduler(dispatcher=dispatch)
         app.state.pi_runner = pi_runner
         app.state.scheduler = scheduler
         if start_background:
@@ -74,6 +97,7 @@ def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
     app.state.cfg = cfg
     app.state.service_token = service_token
     app.state.token_registry = registry
+    app.state.active_observations = {}
 
     app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -95,7 +119,17 @@ def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
 def _make_run_done_handler(app: FastAPI):
     async def handler(session_id: str, msg: dict) -> None:
         scheduler: Scheduler = app.state.scheduler
-        if msg.get("ok"):
+        # Confirm the database receipt, not a subprocess self-report.
+        conn = connect(app.state.cfg.data_dir)
+        try:
+            obs_id = app.state.active_observations.get(session_id)
+            row = conn.execute("SELECT status FROM observations WHERE session_id=? AND id=?", (session_id, obs_id)).fetchone()
+            success = bool(row and row["status"] in {"published", "unchanged"})
+            if not success and row and row["status"] == "running":
+                observation.mark_failed(conn, session_id, obs_id, "Observer process ended without publication")
+        finally:
+            conn.close()
+        if success:
             await scheduler.pi_run_done(session_id)
         else:
             await scheduler.pi_run_failed(session_id)

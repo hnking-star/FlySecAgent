@@ -24,7 +24,7 @@
    - `status` 四态：`inferred-open`（没试过）/ `tried-hit`（试过且有进展）/
                    `tried-miss`（试过没进展）/ `scan-class`（低价值批量扫描）
    - `role` 三态：`direction`（测试方向，默认）/ `endpoint`（具体接口）/ `path`（具体路径）
-   - `evidenceRefs` 和 `tests.record_ids` 只能用 `record:<tool_records.id>`，
+   - `evidenceRefs` 使用 `record:<tool_records.id>` 字符串；`tests.record_ids` 使用整数 ID，
      并且必须真实存在于本会话；禁止编造证据引用
    - `inferred-open` 允许 `attempts=[]`；`tried-*` 和 `scan-class` 必须附至少一条真实 attempt
    - API 在 `apis[]` 中登记；首次发现只写 `endpoint` / `purpose` / `parameters`
@@ -73,3 +73,7 @@
 - 本轮窗口和已发布黑板 revision 来自 context 返回；不要自己猜。
 - Observer 的工具日志由宿主写到 `observations.tool_logs_json`，不是测试证据，不要作为 `evidenceRefs`。
 - 本会话的敏感信息（session_id、token）不出现在模型可见的 context 返回；若模型主动询问身份，答复"由宿主注入，不公开"。
+
+## 总结范围
+
+每轮都整理已读取的执行过程。正常请求、侦察发现、失败结果也是有效进展，应记录到判断和 attempts；并非只有漏洞才写 upserts。按测试方向汇总，不必给每次工具调用单独建节点。先读完本窗口记录列表，重要证据不完整时继续分段读取。有新增内容时不能因未发现漏洞就提交空数组。

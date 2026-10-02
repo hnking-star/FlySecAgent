@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .. import blackboard, observation
 from ..db import connect
+from ..feedback import render_map
 from ..schemas import ContextInput, SubmitInput
 
 router = APIRouter(prefix="/observer", tags=["observer"])
@@ -44,6 +45,11 @@ class SubmitCache:
             self._store.pop(key, None)
             return None
         return body
+
+    def clear_session(self, session_id: str) -> None:
+        for key in list(self._store):
+            if key[0] == session_id:
+                self._store.pop(key, None)
 
     def put(self, session_id: str, h: str, response: dict[str, Any]) -> None:
         self._store[(session_id, h)] = (time.time(), response)
@@ -79,14 +85,14 @@ def _load_state(conn: sqlite3.Connection, project: sqlite3.Row) -> dict:
     if cur_obs is None:
         return blackboard.initial_state()
     row = conn.execute(
-        "SELECT state_json FROM observations WHERE id = ?", (int(cur_obs),)
+        "SELECT state_json FROM observations WHERE id = ? AND session_id = ? AND status = 'published'", (int(cur_obs), project["session_id"])
     ).fetchone()
     if row is None or row["state_json"] is None:
-        return blackboard.initial_state()
+        _raise(409, "invalid_blackboard", "current publication is unavailable")
     try:
         return json.loads(row["state_json"])
     except json.JSONDecodeError:
-        return blackboard.initial_state()
+        _raise(409, "invalid_blackboard", "current publication is not valid JSON")
 
 
 def _window_bounds(project: sqlite3.Row) -> tuple[int, int]:
@@ -109,20 +115,26 @@ async def observer_context(payload: ContextInput, request: Request) -> dict[str,
     try:
         project = _require_project(conn, session_id)
         if payload.mode == "summary":
-            return _ctx_summary(conn, session_id, project, payload)
-        if payload.mode == "window_records":
-            return _ctx_window_records(conn, session_id, project)
-        if payload.mode == "record_detail":
-            return _ctx_record_detail(
+            result = _ctx_summary(conn, session_id, project, payload)
+        elif payload.mode == "window_records":
+            result = _ctx_window_records(conn, session_id, project)
+        elif payload.mode == "record_detail":
+            result = _ctx_record_detail(
                 conn, session_id, project, payload, in_window=True
             )
-        if payload.mode == "blackboard":
-            return _ctx_blackboard(conn, project)
-        if payload.mode == "history_record":
-            return _ctx_record_detail(
+        elif payload.mode == "blackboard":
+            result = _ctx_blackboard(conn, project)
+        elif payload.mode == "history_record":
+            result = _ctx_record_detail(
                 conn, session_id, project, payload, in_window=False
             )
-        _raise(400, "schema_invalid", f"unknown mode {payload.mode!r}")
+        else:
+            _raise(400, "schema_invalid", f"unknown mode {payload.mode!r}")
+        row = conn.execute("SELECT id FROM observations WHERE session_id=? AND status='running' ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
+        if row:
+            entry = {"op": "observation_context", "arguments": payload.model_dump(), "response": result}
+            conn.execute("UPDATE observations SET tool_logs_json=json_insert(tool_logs_json,'$[#]',json(?)) WHERE id=?", (json.dumps(entry, ensure_ascii=False), row["id"]))
+        return result
     finally:
         conn.close()
 
@@ -144,14 +156,9 @@ def _ctx_summary(
         )
     }
     record_count = sum(tool_counts.values())
-    has_truncated = bool(
-        conn.execute(
-            "SELECT 1 FROM tool_records "
-            "WHERE session_id = ? AND id > ? AND id <= ? "
-            "AND (LENGTH(tool_input_json) > ? OR LENGTH(tool_response_json) > ?) "
-            "LIMIT 1",
-            (session_id, start, end, PREVIEW_BYTES, PREVIEW_BYTES),
-        ).fetchone()
+    has_truncated = any(
+        any(json.loads(r["metadata_json"]).get(k) for k in ("truncated", "output_truncated"))
+        for r in conn.execute("SELECT metadata_json FROM tool_records WHERE session_id=? AND id>? AND id<=?", (session_id, start, end))
     )
 
     state = _load_state(conn, project)
@@ -193,7 +200,7 @@ def _ctx_summary(
         },
         "assessments": assessments_out,
         "guidance": state.get("guidance"),
-        "last_errors": [],
+        "last_errors": _last_errors(conn, session_id),
     }
 
 
@@ -257,15 +264,23 @@ def _ctx_record_detail(
     data_bytes = data.encode("utf-8")
     offset = payload.offset
     length = payload.length
+    if offset < len(data_bytes) and data_bytes[offset] & 0xC0 == 0x80:
+        _raise(400, "invalid_offset", "offset must be a UTF-8 character boundary")
     chunk = data_bytes[offset : offset + length]
-    has_more = offset + length < len(data_bytes)
+    # Return only complete UTF-8 characters, and advance by actual bytes returned.
+    text = chunk.decode("utf-8", errors="ignore")
+    chunk = text.encode("utf-8")
+    if not chunk and offset < len(data_bytes):
+        _raise(400, "invalid_length", "length is too small for the next UTF-8 character")
+    has_more = offset + len(chunk) < len(data_bytes)
     return {
         "record_id": record_id,
         "tool_name": row["tool_name"],
         "segment": {
             "offset": offset,
             "length": len(chunk),
-            "data": chunk.decode("utf-8", errors="replace"),
+            "data": text,
+            "next_offset": offset + len(chunk),
             "has_more": has_more,
         },
     }
@@ -293,6 +308,10 @@ async def observer_submit(payload: SubmitInput, request: Request) -> dict[str, A
     conn = _conn(request)
     try:
         project = _require_project(conn, session_id)
+        if project["observer_paused"]:
+            _raise(409, "observer_paused", "Observer is paused")
+        obs_id = observation.start_observation(conn, session_id, trigger="observer_submit")
+        project = _require_project(conn, session_id)
         old_state = _load_state(conn, project)
 
         if (payload.baseRevision or None) != (old_state.get("revision") or None):
@@ -308,14 +327,14 @@ async def observer_submit(payload: SubmitInput, request: Request) -> dict[str, A
                     }
                 ]
             )
-            _append_tool_log(conn, project, sub_hash, response)
+            _append_tool_log(conn, project, sub_hash, response, payload.model_dump())
             return response
 
         # 业务校验
         validation_errors = _validate_submit(conn, session_id, old_state, payload)
         if validation_errors:
             response = _failure(validation_errors)
-            _append_tool_log(conn, project, sub_hash, response)
+            _append_tool_log(conn, project, sub_hash, response, payload.model_dump())
             return response
 
         # merge
@@ -327,7 +346,7 @@ async def observer_submit(payload: SubmitInput, request: Request) -> dict[str, A
                     for c in outcome.conflicts
                 ]
             )
-            _append_tool_log(conn, project, sub_hash, response)
+            _append_tool_log(conn, project, sub_hash, response, payload.model_dump())
             return response
 
         # 确保有 running observation
@@ -351,7 +370,7 @@ async def observer_submit(payload: SubmitInput, request: Request) -> dict[str, A
                 session_id,
                 obs_id,
                 json.dumps(new_state, ensure_ascii=False),
-                PLACEHOLDER_MAP,
+                render_map(new_state, project["pending_window_end"]),
             )
             response = {
                 "ok": True,
@@ -360,7 +379,7 @@ async def observer_submit(payload: SubmitInput, request: Request) -> dict[str, A
                 "warnings": outcome.warnings,
             }
 
-        _append_tool_log(conn, project, sub_hash, response)
+        _append_tool_log(conn, project, sub_hash, response, payload.model_dump())
         cache.put(session_id, sub_hash, response)
         return response
     finally:
@@ -545,26 +564,22 @@ def _append_tool_log(
     project: sqlite3.Row,
     submission_hash: str,
     response: dict[str, Any],
+    arguments: dict | None = None,
 ) -> None:
     """把本次 submit 的摘要追加到当前 observation.tool_logs_json。
 
     这里是尽力而为的审计记录；写失败不影响主流程。
     使用项目当前的 current_observation_id；没有就跳过（第一次提交尚未发布）。
     """
-    cur_obs = project["current_observation_id"]
-    if cur_obs is None:
-        # 第一次 submit：使用 start_observation 返回的 running 行
-        row = conn.execute(
-            "SELECT id FROM observations "
-            "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
-            (project["session_id"],),
-        ).fetchone()
-        if row is None:
-            return
-        cur_obs = int(row["id"])
+    row = conn.execute("SELECT id FROM observations WHERE session_id=? ORDER BY id DESC LIMIT 1", (project["session_id"],)).fetchone()
+    if row is None:
+        return
+    cur_obs = row["id"]
 
     entry = {
         "op": "observation_submit",
+        "arguments": arguments,
+        "response": response,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "hash": submission_hash,
         "ok": bool(response.get("ok")),
@@ -581,3 +596,14 @@ def _append_tool_log(
         )
     except sqlite3.OperationalError:
         pass  # json1 扩展不可用；保守跳过
+
+
+def _last_errors(conn, session_id):
+    row = conn.execute("SELECT tool_logs_json FROM observations WHERE session_id=? ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
+    if not row:
+        return []
+    logs = json.loads(row["tool_logs_json"])
+    for log in reversed(logs):
+        if log.get("op") == "observation_submit":
+            return log.get("errors") or []
+    return []

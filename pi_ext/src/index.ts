@@ -1,8 +1,10 @@
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   createAgentSession,
+  DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -33,7 +35,7 @@ function seedModelsDoc(
   baseUrl: string,
 ): void {
   const modelsPath = join(agentDir, "models.json");
-  if (existsSync(modelsPath)) return;
+
   const api = baseUrl.toLowerCase().includes("/anthropic")
     ? "anthropic-messages"
     : "openai-completions";
@@ -61,13 +63,16 @@ async function main(): Promise<void> {
   const api = requireEnv("FLYSEC_API");
   const sessionId = process.env.FLYSEC_SESSION_ID ?? "unknown";
 
-  const provider = (process.env.FLYSEC_PI_PROVIDER || "anthropic").trim();
+  const provider = (process.env.FLYSEC_PI_PROVIDER || "deepseek").trim();
   const modelId = (process.env.FLYSEC_PI_MODEL || "deepseek-flash").trim();
-  const apiKey = (process.env.FLYSEC_PI_API_KEY || "").trim();
-  const baseUrl = (process.env.FLYSEC_PI_BASE_URL || "").trim();
+  const dataDir = resolve(process.env.FLYSEC_DATA_DIR || "data");
+  const keyFile = process.env.FLYSEC_PI_API_KEY_FILE || join(dataDir, ".deepseek-key");
+  const apiKey = (process.env.FLYSEC_PI_API_KEY || (existsSync(keyFile) ? readFileSync(keyFile, "utf8") : "")).trim();
+  if (!apiKey) throw new Error("Configure FLYSEC_PI_API_KEY or the private data/.deepseek-key file");
+  const baseUrl = (process.env.FLYSEC_PI_BASE_URL || "https://api.deepseek.com/anthropic").trim();
   const agentDir =
     process.env.FLYSEC_PI_AGENT_DIR?.trim() ||
-    join(process.cwd(), "data", "pi", sessionId, ".pi");
+    join(resolve(process.env.FLYSEC_DATA_DIR || "data"), "pi", createHash("sha256").update(sessionId).digest("hex"), ".pi");
 
   process.env.PI_OFFLINE = process.env.PI_OFFLINE || "1";
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -76,9 +81,9 @@ async function main(): Promise<void> {
     process.env.OPENAI_BASE_URL = baseUrl;
   }
   if (apiKey) {
-    if (!process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = apiKey;
-    if (!process.env.ANTHROPIC_AUTH_TOKEN) process.env.ANTHROPIC_AUTH_TOKEN = apiKey;
-    if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = apiKey;
+    process.env.ANTHROPIC_API_KEY = apiKey;
+    process.env.ANTHROPIC_AUTH_TOKEN = apiKey;
+    process.env.OPENAI_API_KEY = apiKey;
   }
 
   mkdirSync(agentDir, { recursive: true });
@@ -105,37 +110,34 @@ async function main(): Promise<void> {
     }
   }
 
-  const settingsManager = SettingsManager.create(process.cwd(), agentDir, {
-    projectTrusted: true,
+  const workspace = join(agentDir, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  const settingsManager = SettingsManager.create(workspace, agentDir, { projectTrusted: true });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: workspace, agentDir, settingsManager, systemPrompt,
+    noContextFiles: true, noExtensions: true, noSkills: true,
+    noPromptTemplates: true, noThemes: true,
   });
-  const sessionManager = SessionManager.inMemory(process.cwd());
-
-  const found =
-    modelRuntime.getModel(provider, modelId) ||
-    modelRuntime.getModels(provider).find((m) => m.id === modelId);
-
+  await resourceLoader.reload();
+  const sessionManager = SessionManager.continueRecent(workspace, join(agentDir, "sessions"));
+  const found = modelRuntime.getModel(provider, modelId);
+  if (!found) throw new Error(`Configured Pi model unavailable: ${provider}/${modelId}`);
   const { session } = await createAgentSession({
-    cwd: process.cwd(),
-    agentDir,
-    modelRuntime,
-    settingsManager,
-    sessionManager,
-    noTools: "builtin",
-    customTools: observationTools.tools,
-    ...(found ? { model: found } : {}),
+    cwd: workspace, agentDir, modelRuntime, settingsManager, sessionManager, resourceLoader,
+    tools: ["observation_context", "observation_submit"],
+    customTools: observationTools.tools, model: found,
   });
-
-  // 以自定义的 system prompt 覆盖默认资源加载器行为：
-  // 这里通过 ResourceLoader 可配 systemPrompt；但 inMemory session + 简化 settings 时直接
-  // 把 systemPrompt 作为首条消息注入也可以。Pi SDK 在首轮会把 ResourceLoader 的 systemPrompt
-  // 拼进 system message；我们这里走最简路径——直接通过 sendUserMessage 的首轮
-  // 由 System 提示词开头的 markdown 文件主导（通过 loadSystemPrompt 控制内容）。
-  await session.sendUserMessage(systemPrompt, { deliverAs: "steer" });
-
-  send({ op: "ready" });
+  const activeTools = session.getActiveToolNames().sort();
+  if (activeTools.join(",") !== "observation_context,observation_submit") {
+    throw new Error("Unexpected active Observer tools");
+  }
+  // Creating a session must not invoke the model or consume a record window.
+  send({ op: "ready", observer_session_id: session.sessionId, tools: activeTools });
 
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const queue: RpcIn[] = [];
+  let closed = false;
+  let stopping = false;
   let resolveNext: ((msg: RpcIn | null) => void) | null = null;
 
   rl.on("line", (line) => {
@@ -143,6 +145,7 @@ async function main(): Promise<void> {
     if (!trimmed) return;
     try {
       const msg = JSON.parse(trimmed) as RpcIn;
+      if (msg.op === "shutdown") { stopping = true; void session.abort(); }
       if (resolveNext) {
         const fn = resolveNext;
         resolveNext = null;
@@ -155,6 +158,7 @@ async function main(): Promise<void> {
     }
   });
   rl.on("close", () => {
+    closed = true; stopping = true; void session.abort();
     if (resolveNext) {
       resolveNext(null);
       resolveNext = null;
@@ -168,12 +172,13 @@ async function main(): Promise<void> {
         resolve(buffered);
         return;
       }
+      if (closed) { resolve(null); return; }
       resolveNext = resolve;
     });
 
   while (true) {
     const msg = await nextMsg();
-    if (msg === null || msg.op === "shutdown") {
+    if (stopping || msg === null || msg.op === "shutdown") {
       break;
     }
     if (msg.op !== "run_observation") {
@@ -183,7 +188,7 @@ async function main(): Promise<void> {
     send({ op: "run_started", trigger });
     let result: RoundResult;
     try {
-      result = await runOneRound(session, observationTools, trigger);
+      result = await runOneRound(session, observationTools, trigger, { shouldStop: () => stopping });
     } catch (err) {
       result = {
         ok: false,
@@ -200,7 +205,8 @@ async function main(): Promise<void> {
   }
 
   try {
-    session.dispose?.();
+    session.dispose();
+    rl.close();
   } catch {
     // ignore
   }

@@ -13,6 +13,7 @@ import uvicorn
 from .app import create_app, startup_recover
 from .bootstrap import ensure_data_dir, ensure_service_token
 from .config import load_config
+from .auth import token_fingerprint
 
 
 def main() -> None:
@@ -22,7 +23,7 @@ def main() -> None:
     recovered = startup_recover(cfg)
     print(
         f"[flysec] data_dir={cfg.data_dir} port={cfg.port} "
-        f"token_fp={token[:8]} recovered={recovered}"
+        f"token_fp={token_fingerprint(token)} recovered={recovered}"
     )
     app = create_app(cfg, start_background=True)
     uvicorn.run(app, host="127.0.0.1", port=cfg.port, log_config=None)
