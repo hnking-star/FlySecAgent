@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# runtime data（SQLite、token、本地日志）
+data/*
+!data/.gitkeep
+
+# macOS
+.DS_Store
+
+docs/

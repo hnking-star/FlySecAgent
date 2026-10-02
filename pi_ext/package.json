@@ -1,0 +1,8 @@
+{
+  "name": "flysec-pi-ext",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'TODO in Task 7'"
+  }
+}
