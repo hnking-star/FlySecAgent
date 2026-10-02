@@ -39,7 +39,10 @@ def test_token_fingerprint_eight_hex():
 @pytest.mark.asyncio
 async def test_hook_requires_service_token(client):
     c, _ = client
-    r = await c.get("/hook/health-stub")
+    r = await c.post(
+        "/hook/project.ensure",
+        json={"session_id": "s1", "hint": {"target": "t", "objective": "o"}},
+    )
     assert r.status_code == 401
     assert r.json()["code"] == "unauthorized"
 
@@ -47,7 +50,11 @@ async def test_hook_requires_service_token(client):
 @pytest.mark.asyncio
 async def test_hook_wrong_token(client):
     c, _ = client
-    r = await c.get("/hook/health-stub", headers={"X-FlySec-Token": "wrong"})
+    r = await c.post(
+        "/hook/project.ensure",
+        headers={"X-FlySec-Token": "wrong"},
+        json={"session_id": "s1", "hint": {"target": "t", "objective": "o"}},
+    )
     assert r.status_code == 401
 
 
@@ -55,9 +62,13 @@ async def test_hook_wrong_token(client):
 async def test_hook_valid_token(client):
     c, app = client
     token = app.state.service_token
-    r = await c.get("/hook/health-stub", headers={"X-FlySec-Token": token})
+    r = await c.post(
+        "/hook/project.ensure",
+        headers={"X-FlySec-Token": token},
+        json={"session_id": "s1", "hint": {"target": "t", "objective": "o"}},
+    )
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "stub": "hook"}
+    assert r.json() == {"ok": True, "created": True}
 
 
 @pytest.mark.asyncio

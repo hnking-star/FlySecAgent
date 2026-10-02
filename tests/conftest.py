@@ -11,11 +11,14 @@ from httpx import ASGITransport, AsyncClient
 
 from service.app import create_app
 from service.config import Config
+from service.db import init_db
 
 
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
-    return Config(port=0, data_dir=tmp_path)
+    cfg = Config(port=0, data_dir=tmp_path)
+    init_db(cfg.data_dir)
+    return cfg
 
 
 @pytest_asyncio.fixture

@@ -66,6 +66,7 @@ def create_app(cfg=None) -> FastAPI:
         return await _handle(request, call_next, service_token, registry)
 
     _register_health(app)
+    _register_routers(app)
     _register_stubs(app)
     return app
 
@@ -76,12 +77,15 @@ def _register_health(app: FastAPI) -> None:
         return {"ok": True, "version": VERSION}
 
 
-def _register_stubs(app: FastAPI) -> None:
-    """最小 stub 路由，用于测中间件；业务由后续 Task 替换。"""
+def _register_routers(app: FastAPI) -> None:
+    """挂真正的业务 router。"""
+    from .routers import hook
 
-    @app.get("/hook/health-stub")
-    async def hook_stub() -> dict[str, Any]:
-        return {"ok": True, "stub": "hook"}
+    app.include_router(hook.router)
+
+
+def _register_stubs(app: FastAPI) -> None:
+    """observer / control 的 stub 路由；Task 5 / Task 10 替换。"""
 
     @app.post("/observer/context")
     async def observer_context_stub(request: Request) -> dict[str, Any]:
