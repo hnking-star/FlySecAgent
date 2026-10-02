@@ -21,4 +21,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["service*"]
+include = ["service*", "tests*"]
+
+[tool.setuptools.package-data]
+service = ["schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
