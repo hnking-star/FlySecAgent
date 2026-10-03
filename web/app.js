@@ -8,10 +8,19 @@
   let apiMode = "all";
   let expandedApiId = null;
   let selectedNodeId = null;
+  let projects = [];
+  let view = "projects";
+  let detailGeneration = 0;
+  let projectsGeneration = 0;
+  let evidenceGeneration = 0;
+  let reportGeneration = 0;
+  let pendingRequests = 0;
+  let connectionError = false;
+  let selectedTab = "graph";
   const $ = (id) => document.getElementById(id);
   const STATUS_LABELS = {
-    "tried-hit": "确认命中",
-    "tried-miss": "确认未命中",
+    "tried-hit": "已尝试 · 有进展",
+    "tried-miss": "本次未见进展",
     "inferred-open": "等待验证",
     "scan-class": "扫描归类",
     published: "已发布",
@@ -29,8 +38,10 @@
   }
 
   function setLoading(loading) {
-    $("connection").classList.toggle("loading", loading);
-    $("connection").lastChild.textContent = loading ? " 正在同步" : " 已连接";
+    pendingRequests = Math.max(0, pendingRequests + (loading ? 1 : -1));
+    $("connection").classList.toggle("loading", pendingRequests > 0);
+    $("connection").classList.toggle("error", pendingRequests === 0 && connectionError);
+    $("connection").lastChild.textContent = pendingRequests > 0 ? " 正在同步" : connectionError ? " 请求失败" : " 已连接";
   }
 
   async function request(path, options = {}) {
@@ -38,8 +49,9 @@
     if (!response.ok) {
       let body = {};
       try { body = await response.json(); } catch (_) { /* ignored */ }
-      throw new Error(body.message || `HTTP ${response.status}`);
+      throw new Error(body.message || body.detail?.message || `HTTP ${response.status}`);
     }
+    connectionError = false;
     return response;
   }
 
@@ -49,34 +61,183 @@
     return Object.prototype.hasOwnProperty.call(STATUS_LABELS, status) ? status : "off";
   }
 
-  async function renderProjects(projects, preferredSession = "") {
+  function projectName(project) {
+    if (project.name) return project.name;
+    try { return new URL(project.target).host.replace(/^www\./, "") || project.target || "未命名项目"; }
+    catch (_) { return project.target || "未命名项目"; }
+  }
+
+  function projectState(project) {
+    if (!project.observation_enabled) return ["closed", "观察已关闭", "off"];
+    if (project.observer_paused) return ["paused", "Observer 已暂停", "warn"];
+    return ["enabled", "观察已开启", "ok"];
+  }
+
+  function projectTimestamp(project) { return project.published_at || project.created_at || ""; }
+
+  function timestampValue(value) {
+    const date = Date.parse(value || "");
+    return Number.isNaN(date) ? 0 : date;
+  }
+
+  function formatDate(value) {
+    if (!value) return "尚无记录";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+
+  function renderProjects() {
     const select = $("project-select"); select.replaceChildren();
     if (!projects.length) {
       select.append(el("option", "", "没有项目"));
-      selectedSession = ""; current = null;
-      $("overview").replaceChildren();
-      showEmpty("还没有测试项目", "在 Coco 中发起一次测试后，新项目会自动出现在这里。");
-      return;
+      select.disabled = true;
+    } else {
+      select.disabled = false;
+      for (const project of projects) {
+        const option = el("option", "", `${projectName(project)} · ${project.session_id.slice(0, 8)}`);
+        option.value = project.session_id; select.append(option);
+      }
+      select.value = selectedSession;
     }
-    for (const project of projects) {
-      const status = project.observation_enabled ? "ON" : "OFF";
-      const option = el("option", "", `${status} · ${project.target} · ${project.session_id.slice(0, 8)}`);
-      option.value = project.session_id; select.append(option);
+    $("sidebar-project-count").textContent = String(projects.length);
+    const stats = [
+      ["已加载项目", projects.length, "当前列表 · 最多 200 个"],
+      ["观察已开启", projects.filter((p) => p.observation_enabled).length, "采集开启，不代表正在测试"],
+      ["已有黑板", projects.filter((p) => p.current_observation_id != null).length, "已有成功发布快照"],
+      ["待首次发布", projects.filter((p) => p.current_observation_id == null).length, "尚无已发布黑板"],
+    ];
+    const statBox = $("project-stats"); statBox.replaceChildren();
+    for (const [label, value, note] of stats) {
+      const stat = el("div", "portfolio-stat");
+      stat.append(el("span", "portfolio-stat-label", label), el("strong", "portfolio-stat-value", value), el("small", "portfolio-stat-note", note));
+      statBox.append(stat);
     }
-    const fromUrl = new URLSearchParams(location.search).get("session");
-    const wanted = preferredSession || fromUrl;
-    selectedSession = projects.some((p) => p.session_id === wanted) ? wanted : projects[0].session_id;
-    select.value = selectedSession;
-    await loadProject(preferredSession ? selectedObservation : null);
+    renderProjectList(); renderRecentProjects();
+  }
+
+  function renderProjectList() {
+    const query = $("project-search").value.trim().toLowerCase(), status = $("project-status").value, sort = $("project-sort").value;
+    const filtered = projects.filter((project) => {
+      if (status === "unpublished" && project.current_observation_id != null) return false;
+      if (status !== "all" && status !== "unpublished" && projectState(project)[0] !== status) return false;
+      return !query || [project.name, project.target, project.session_id, project.objective].join(" ").toLowerCase().includes(query);
+    });
+    filtered.sort((a, b) => {
+      if (sort === "target") return String(a.target).localeCompare(String(b.target), "zh-CN") || String(a.session_id).localeCompare(String(b.session_id));
+      const difference = timestampValue(b.created_at) - timestampValue(a.created_at);
+      return (sort === "oldest" ? -difference : difference) || String(a.session_id).localeCompare(String(b.session_id));
+    });
+    $("project-results").textContent = query || status !== "all" ? `${filtered.length} / ${projects.length} 个项目` : `${projects.length} 个项目`;
+    const list = $("project-list"); list.replaceChildren();
+    const empty = $("project-list-empty"); empty.classList.toggle("hidden", filtered.length > 0);
+    empty.textContent = projects.length ? "没有匹配的项目，请调整搜索或筛选条件。" : "还没有项目。主 Agent 启用观察并创建会话后，项目会显示在这里。";
+    for (const project of filtered) {
+      const button = el("button", "project-row"); button.type = "button";
+      button.setAttribute("aria-label", `查看项目 ${projectName(project)}`);
+      const identity = el("span", "project-identity"), copy = el("span", "project-copy");
+      const name = el("strong", "project-name", projectName(project)); name.title = projectName(project);
+      const subtitle = projectName(project) === project.target ? project.objective : project.target;
+      const target = el("span", "project-target", subtitle); target.title = subtitle;
+      copy.append(name, target, el("span", "project-session", `Session ${project.session_id.slice(0, 12)}`));
+      identity.append(el("span", "project-icon", projectName(project).slice(0, 1).toUpperCase()), copy);
+      const [, stateText, kind] = projectState(project), state = el("span", "project-state");
+      state.append(badge(stateText, kind), el("small", "muted", project.agent_turn_active ? "主 Agent 回合活跃" : "主 Agent 回合空闲"));
+      const publication = el("span", "project-publication");
+      publication.append(el("strong", "", project.current_observation_id == null ? "未发布" : `版本 #${project.current_observation_id}`), el("small", "muted", project.current_observation_id == null ? "等待首次整理" : "已发布快照"));
+      const position = el("span", "project-position");
+      position.append(el("strong", "", `#${project.processed_record_id || 0}`), el("small", "muted", "已处理记录位置"));
+      const updated = el("span", "project-updated");
+      updated.append(el("strong", "", formatDate(projectTimestamp(project))), el("small", "muted", project.published_at ? "最近发布" : "创建时间"));
+      updated.title = projectTimestamp(project);
+      button.append(identity, state, publication, position, updated, el("span", "project-arrow", "↗"));
+      button.addEventListener("click", () => openProject(project.session_id)); list.append(button);
+    }
+  }
+
+  function renderRecentProjects() {
+    const box = $("recent-projects"); box.replaceChildren();
+    const recent = [...projects].sort((a, b) => timestampValue(projectTimestamp(b)) - timestampValue(projectTimestamp(a))).slice(0, 5);
+    for (const project of recent) {
+      const button = el("button", `recent-project ${view === "detail" && selectedSession === project.session_id ? "active" : ""}`); button.type = "button";
+      button.append(el("span", "recent-project-name", projectName(project)), el("small", "recent-project-meta", `${project.session_id.slice(0, 8)} · ${project.current_observation_id == null ? "待发布" : "已发布"}`));
+      button.title = `${projectName(project)} · ${project.target}`;
+      button.addEventListener("click", () => openProject(project.session_id)); box.append(button);
+    }
+    if (!recent.length) box.append(el("p", "sidebar-empty", "暂无项目"));
+  }
+
+  function setView(next) {
+    view = next;
+    $("projects-view").classList.toggle("hidden", next !== "projects");
+    $("project-detail-view").classList.toggle("hidden", next !== "detail");
+    $("detail-toolbar").classList.toggle("hidden", next !== "detail");
+    $("breadcrumb-detail").classList.toggle("hidden", next !== "detail");
+    $("nav-projects").classList.toggle("active", next === "projects");
+    $("nav-projects").setAttribute("aria-current", next === "projects" ? "page" : "false");
+    renderRecentProjects();
+  }
+
+  function updateUrl(session, push) {
+    const url = new URL(location.href);
+    if (session) url.searchParams.set("session", session); else url.searchParams.delete("session");
+    if (url.href !== location.href) history[push ? "pushState" : "replaceState"](null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function clearDetail() {
+    current = null; selectedObservation = null; evidenceGeneration += 1; reportGeneration += 1;
+    resetFilters();
+    $("overview").replaceChildren(); $("graph").replaceChildren(); $("api-list").replaceChildren();
+    $("map-text").textContent = ""; $("report-text").textContent = "";
+    $("assessment-detail").className = "placeholder"; $("assessment-detail").textContent = "点击图中的节点查看判断、尝试和证据。";
+    $("record-detail").className = "evidence-view placeholder"; $("record-detail").textContent = "点击 record 证据查看原始输入与结果。";
+    $("version-select").replaceChildren(el("option", "", "当前发布版本")); $("version-select").disabled = true;
+    $("report").disabled = true; $("observer-logs").disabled = true;
+    if ($("report-dialog").open) $("report-dialog").close();
+  }
+
+  function openProjects(push = true) {
+    const leavingDetail = view !== "projects";
+    detailGeneration += 1; selectedSession = ""; clearDetail(); setView("projects"); updateUrl("", push);
+    setDetailTab("graph");
+    if (leavingDetail) window.scrollTo(0, 0);
+    $("sidebar-detail").textContent = "选择项目，查看探索图与 API 台账。";
+  }
+
+  async function openProject(session, push = true, observationId = null) {
+    const enteringDetail = view !== "detail" || session !== selectedSession;
+    if (session !== selectedSession) setDetailTab("graph");
+    selectedSession = session;
+    $("project-select").value = session;
+    setView("detail"); updateUrl(session, push);
+    if (enteringDetail) window.scrollTo(0, 0);
+    await loadProject(observationId);
+  }
+
+  async function syncRoute() {
+    const session = new URLSearchParams(location.search).get("session");
+    if (session) await openProject(session, false); else openProjects(false);
   }
 
   async function refreshProjects() {
+    const generation = ++projectsGeneration;
     setLoading(true);
     try {
       const body = await (await request("/web/projects")).json();
-      await renderProjects(body.projects, selectedSession);
-      toast("项目和黑板已同步");
-    } catch (error) { showError(error); }
+      if (generation !== projectsGeneration) return;
+      projects = body.projects || []; renderProjects();
+      const session = new URLSearchParams(location.search).get("session");
+      if (session) await openProject(session, false, session === selectedSession ? selectedObservation : null);
+      else openProjects(false);
+    } catch (error) {
+      if (generation !== projectsGeneration) return;
+      if (!projects.length && view === "projects") {
+        $("project-list-empty").classList.remove("hidden"); $("project-list-empty").textContent = `无法加载项目：${error.message}。请确认本地服务可用后刷新。`;
+      } else if (!current && view === "detail") {
+        showEmpty("无法同步项目", `${error.message}。请确认本地服务可用后刷新，或返回项目列表。`);
+      }
+      showError(error);
+    }
     finally { setLoading(false); }
   }
 
@@ -93,20 +254,37 @@
   }
 
   async function loadProject(observationId = null) {
-    selectedSession = $("project-select").value;
-    if (!selectedSession) return;
+    if (!selectedSession || view !== "detail") return;
+    const session = selectedSession, generation = ++detailGeneration;
+    clearDetail();
     selectedObservation = observationId;
+    const project = projects.find((p) => p.session_id === session);
+    $("breadcrumb-detail").textContent = project ? projectName(project) : "项目详情";
+    $("sidebar-detail").textContent = "正在加载项目详情…";
+    showEmpty("正在加载项目", "正在读取该会话的已发布黑板与历史版本。");
     setLoading(true);
     const query = observationId ? `?observation_id=${encodeURIComponent(observationId)}` : "";
     try {
-      current = await (await request(`/web/project/${encodeURIComponent(selectedSession)}${query}`)).json();
-      history.replaceState(null, "", `/web/?session=${encodeURIComponent(selectedSession)}`);
+      const data = await (await request(`/web/project/${encodeURIComponent(session)}${query}`)).json();
+      if (generation !== detailGeneration || session !== selectedSession || view !== "detail") return;
+      if (data.project?.session_id !== session) throw new Error("返回的项目身份与当前会话不一致");
+      current = data;
       renderProject(current);
-    } catch (error) { showError(error); }
+    } catch (error) {
+      if (generation !== detailGeneration || session !== selectedSession || view !== "detail") return;
+      current = null; $("overview").replaceChildren();
+      showEmpty("无法加载项目", `${error.message}。请刷新重试或返回项目列表。`);
+      $("sidebar-detail").textContent = "项目详情加载失败";
+      showError(error);
+    }
     finally { setLoading(false); }
   }
 
   function renderProject(data) {
+    $("breadcrumb-detail").textContent = projectName(data.project);
+    $("sidebar-detail").textContent = `${projectState(data.project)[1]} · ${data.observation ? `黑板 #${data.observation.id}` : "尚未发布黑板"}`;
+    $("report").disabled = false;
+    $("observer-logs").disabled = !(data.observation?.id || data.latest_run?.id);
     renderVersions(data.versions, data.observation?.id || null);
     renderOverview(data);
     if (!data.state) {
@@ -125,11 +303,12 @@
 
   function renderVersions(versions, activeId) {
     const select = $("version-select"); select.replaceChildren();
+    select.disabled = !versions.length;
     const latest = el("option", "", "当前发布版本"); latest.value = ""; select.append(latest);
     for (const version of versions) {
       const label = `#${version.id} · ${version.finished_at || version.started_at} · ${(version.revision || "无 revision").slice(0, 12)}`;
       const option = el("option", "", label); option.value = String(version.id);
-      if (version.id === activeId && selectedObservation) option.selected = true;
+      if (String(version.id) === String(activeId) && selectedObservation) option.selected = true;
       select.append(option);
     }
   }
@@ -143,17 +322,18 @@
     const target = $("overview"); target.replaceChildren();
     const summary = el("section", "project-summary");
     const copy = el("div", "project-copy");
-    copy.append(el("p", "eyebrow", "ACTIVE ENGAGEMENT"), el("h2", "", p.target), el("p", "project-objective", p.objective));
+    copy.append(el("p", "eyebrow", "PROJECT OVERVIEW"), el("h2", "", projectName(p)), el("p", "project-target", p.target), el("p", "project-objective", p.objective), el("p", "project-session", `Session ${p.session_id}`));
     const badges = el("div", "project-badges");
-    badges.append(badge(p.observation_enabled ? "观察开启" : "观察关闭", p.observation_enabled ? "ok" : "off"));
-    badges.append(badge(p.observer_paused ? "Observer 暂停" : "Observer 运行", p.observer_paused ? "warn" : "ok"));
-    badges.append(badge(statusLabel(latest?.status), statusKind(latest?.status)));
+    const [, label, kind] = projectState(p);
+    badges.append(badge(label, kind));
+    badges.append(badge(p.agent_turn_active ? "主 Agent 回合活跃" : "主 Agent 回合空闲", p.agent_turn_active ? "ok" : "off"));
+    badges.append(badge(`最近整理：${statusLabel(latest?.status)}`, statusKind(latest?.status)));
     summary.append(copy, badges); target.append(summary);
     const counts = statusCounts(state.assessments || []);
     const metrics = [
-      ["判断", (state.assessments || []).length, `${counts["tried-hit"] || 0} 命中 · ${counts["tried-miss"] || 0} 未命中`],
+      ["判断", (state.assessments || []).length, `${counts["tried-hit"] || 0} 有进展 · ${counts["inferred-open"] || 0} 待验证`],
       ["API", (state.apis || []).length, `${(state.apis || []).filter((a) => (a.tests || []).length).length} 已测试`],
-      ["证据位置", `#${p.processed_record_id}`, p.pending_window_end === null ? "窗口已提交" : `待处理至 #${p.pending_window_end}`],
+      ["快照截至", data.observation ? `#${data.observation.end_record_id}` : "—", data.observation ? `项目已处理至 #${p.processed_record_id}` : "尚未发布快照"],
       ["版本", (state.revision || "—").slice(0, 8), data.observation ? `observation #${data.observation.id}` : "尚未发布"],
     ];
     const grid = el("div", "metrics-grid");
@@ -165,7 +345,7 @@
 
   function renderGraphFilters(items) {
     const counts = statusCounts(items), target = $("graph-filters"); target.replaceChildren();
-    const options = [["all", "全部", items.length], ["tried-hit", "命中", counts["tried-hit"] || 0], ["tried-miss", "未命中", counts["tried-miss"] || 0], ["inferred-open", "待验证", counts["inferred-open"] || 0]];
+    const options = [["all", "全部", items.length], ["tried-hit", "有进展", counts["tried-hit"] || 0], ["tried-miss", "未见进展", counts["tried-miss"] || 0], ["inferred-open", "待验证", counts["inferred-open"] || 0]];
     for (const [value, label, count] of options) {
       const button = el("button", `filter ${graphFilter === value ? "active" : ""}`, `${label} ${count}`); button.type = "button";
       button.setAttribute("aria-pressed", graphFilter === value ? "true" : "false");
@@ -187,7 +367,12 @@
   function renderGraph(allItems) {
     const items = graphFilter === "all" ? allItems : allItems.filter((item) => item.status === graphFilter);
     const graph = $("graph"); graph.replaceChildren();
-    if (!items.length) { $("graph-count").textContent = `0/${allItems.length} 个判断`; graph.style.height = "260px"; graph.append(el("div", "graph-empty", "当前筛选没有判断。")); return; }
+    if (!items.length) {
+      $("graph-count").textContent = `0/${allItems.length} 个判断`; graph.style.height = "260px";
+      graph.append(el("div", "graph-empty", "当前筛选没有判断。"));
+      selectedNodeId = null; $("assessment-detail").className = "placeholder"; $("assessment-detail").textContent = "当前筛选没有可查看的判断。";
+      return;
+    }
     const depth = depths(items), maxDepth = Math.max(...depth.values()), positions = new Map();
     const levels = new Map(); let maxRows = 1;
     for (const item of items) { const d = depth.get(item.id) || 0; if (!levels.has(d)) levels.set(d, []); levels.get(d).push(item); }
@@ -344,9 +529,19 @@
   }
 
   async function loadRecord(id) {
+    if (!current || view !== "detail") return;
+    const session = selectedSession, generation = detailGeneration, evidence = ++evidenceGeneration;
+    setDetailTab("evidence");
+    $("record-detail").className = "evidence-view placeholder";
+    $("record-detail").textContent = `正在读取 record:${id}…`;
     setLoading(true);
-    try { const body = await (await request(`/web/record/${encodeURIComponent(selectedSession)}/${id}`)).json(); renderRecord(body.record); }
-    catch (error) { showError(error); } finally { setLoading(false); }
+    try {
+      const body = await (await request(`/web/record/${encodeURIComponent(session)}/${id}`)).json();
+      if (view !== "detail" || session !== selectedSession || generation !== detailGeneration || evidence !== evidenceGeneration) return;
+      renderRecord(body.record);
+    } catch (error) {
+      if (view === "detail" && session === selectedSession && generation === detailGeneration && evidence === evidenceGeneration) showError(error);
+    } finally { setLoading(false); }
   }
 
   function jsonBlock(title, value) { const box = el("section", "json-section"); box.append(el("h4", "", title)); const pre = el("pre", "text-block", JSON.stringify(value, null, 2)); box.append(pre); return box; }
@@ -359,35 +554,82 @@
 
   async function loadObserverLogs() {
     const id = current?.observation?.id || current?.latest_run?.id; if (!id) return;
+    const session = selectedSession, generation = detailGeneration, evidence = ++evidenceGeneration;
+    setDetailTab("evidence");
+    $("record-detail").className = "evidence-view placeholder";
+    $("record-detail").textContent = "正在读取 Observer 工具日志…";
     setLoading(true);
     try {
-      const body = await (await request(`/web/observation/${encodeURIComponent(selectedSession)}/${id}/logs`)).json();
+      const body = await (await request(`/web/observation/${encodeURIComponent(session)}/${id}/logs`)).json();
+      if (view !== "detail" || session !== selectedSession || generation !== detailGeneration || evidence !== evidenceGeneration) return;
       const box = $("record-detail"); box.className = "evidence-view"; box.replaceChildren();
       body.logs.forEach((log, index) => { const card = el("section", "log-card"); const head = el("div", "record-head"); head.append(el("strong", "", `${index + 1}. ${log.op || "event"}`), badge(log.ok === false ? "failed" : "recorded", log.ok === false ? "off" : "ok")); card.append(head, jsonBlock("内容", log)); box.append(card); });
       if (!body.logs.length) box.append(el("p", "placeholder", "当前观察没有工具日志。"));
-    } catch (error) { showError(error); } finally { setLoading(false); }
+    } catch (error) {
+      if (view === "detail" && session === selectedSession && generation === detailGeneration && evidence === evidenceGeneration) showError(error);
+    } finally { setLoading(false); }
   }
 
   async function loadReport() {
-    const query = selectedObservation ? `?observation_id=${selectedObservation}` : ""; setLoading(true);
-    try { $("report-text").textContent = await (await request(`/web/report/${encodeURIComponent(selectedSession)}${query}`)).text(); $("report-dialog").showModal(); }
-    catch (error) { showError(error); } finally { setLoading(false); }
+    if (!current || view !== "detail") return;
+    const session = selectedSession, generation = detailGeneration, report = ++reportGeneration;
+    const query = selectedObservation ? `?observation_id=${encodeURIComponent(selectedObservation)}` : ""; setLoading(true);
+    try {
+      const text = await (await request(`/web/report/${encodeURIComponent(session)}${query}`)).text();
+      if (view !== "detail" || session !== selectedSession || generation !== detailGeneration || report !== reportGeneration) return;
+      $("report-text").textContent = text;
+      if (!$("report-dialog").open) $("report-dialog").showModal();
+    } catch (error) {
+      if (view === "detail" && session === selectedSession && generation === detailGeneration && report === reportGeneration) showError(error);
+    } finally { setLoading(false); }
   }
 
-  function showError(error) { $("record-detail").className = "evidence-view error"; $("record-detail").textContent = `错误：${error.message}`; toast(error.message, true); }
+  function setDetailTab(tab, focus = false) {
+    selectedTab = tab;
+    for (const name of ["graph", "apis", "evidence"]) {
+      const button = $(`workspace-tab-${name}`), panel = $(`tab-${name}`), active = name === tab;
+      button.classList.toggle("active", active); button.setAttribute("aria-selected", active ? "true" : "false"); button.tabIndex = active ? 0 : -1;
+      panel.classList.toggle("hidden", !active);
+      if (active && focus) button.focus();
+    }
+  }
+
+  function showError(error) {
+    connectionError = true;
+    if (view === "detail") { $("record-detail").className = "evidence-view error"; $("record-detail").textContent = `错误：${error.message}`; }
+    toast(error.message, true);
+  }
   let toastTimer; function toast(message, bad = false) { const node = $("toast"); node.textContent = message; node.className = `toast show ${bad ? "bad" : ""}`; clearTimeout(toastTimer); toastTimer = setTimeout(() => node.className = "toast", 2200); }
 
-  $("project-select").addEventListener("change", () => { resetFilters(); loadProject(); });
+  $("project-select").addEventListener("change", (event) => openProject(event.target.value));
   $("version-select").addEventListener("change", (event) => loadProject(event.target.value || null));
   $("refresh").addEventListener("click", refreshProjects);
   $("report").addEventListener("click", loadReport);
   $("observer-logs").addEventListener("click", loadObserverLogs);
   $("api-search").addEventListener("input", (event) => { apiQuery = event.target.value; renderApis(current?.state?.apis || []); });
   $("api-filter").addEventListener("change", (event) => { apiMode = event.target.value; renderApis(current?.state?.apis || []); });
+  $("project-search").addEventListener("input", renderProjectList);
+  $("project-status").addEventListener("change", renderProjectList);
+  $("project-sort").addEventListener("change", renderProjectList);
+  for (const id of ["nav-projects", "breadcrumb-projects", "back-to-projects"]) $(id).addEventListener("click", () => openProjects());
+  for (const name of ["graph", "apis", "evidence"]) {
+    const button = $(`workspace-tab-${name}`);
+    button.addEventListener("click", () => setDetailTab(name));
+    button.addEventListener("keydown", (event) => {
+      const names = ["graph", "apis", "evidence"], index = names.indexOf(selectedTab);
+      const target = { ArrowRight: (index + 1) % 3, ArrowLeft: (index + 2) % 3, Home: 0, End: 2 }[event.key];
+      if (target === undefined) return;
+      event.preventDefault(); setDetailTab(names[target], true);
+    });
+  }
+  window.addEventListener("popstate", syncRoute);
   $("copy-report").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText($("report-text").textContent); toast("报告已复制"); }
     catch (_) { toast("浏览器未允许复制，请手工选择文本", true); }
   });
   $("close-report").addEventListener("click", () => $("report-dialog").close());
+  setView(new URLSearchParams(location.search).get("session") ? "detail" : "projects");
+  setDetailTab("graph");
+  if (view === "detail") showEmpty("正在加载项目", "正在同步项目列表与当前会话的黑板。");
   refreshProjects();
 })();

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,100 @@ async def test_web_shell_and_read_only_apis_are_public_on_loopback(client):
     assert (await c.get("/web/app.js")).status_code == 200
     assert (await c.get("/web/styles.css")).status_code == 200
     assert (await c.get("/web/projects")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_project_management_shell_has_accessible_controls(client):
+    class ShellParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.elements = []
+            self.options = {}
+            self.select_id = None
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            self.elements.append((tag, attrs))
+            if tag == "select":
+                self.select_id = attrs.get("id")
+                self.options[self.select_id] = []
+            elif tag == "option" and self.select_id is not None:
+                self.options[self.select_id].append(attrs.get("value"))
+
+        def handle_endtag(self, tag):
+            if tag == "select":
+                self.select_id = None
+
+    c, _ = client
+    page = await c.get("/web/")
+    assert page.status_code == 200
+    parser = ShellParser()
+    parser.feed(page.text)
+    assert "项目管理" in page.text
+    for element_id in (
+        "projects-view", "project-detail-view", "project-search", "project-status",
+        "project-sort", "project-list", "back-to-projects", "recent-projects",
+    ):
+        matches = [(tag, attrs) for tag, attrs in parser.elements if attrs.get("id") == element_id]
+        assert len(matches) == 1, f"expected one element with id={element_id}"
+    labels = {attrs.get("for") for tag, attrs in parser.elements if tag == "label"}
+    controls = {attrs.get("id"): (tag, attrs) for tag, attrs in parser.elements}
+    assert controls["project-search"][0] == "input"
+    assert controls["project-search"][1]["type"] == "search"
+    for element_id in ("project-search", "project-status", "project-sort"):
+        assert element_id in labels or controls[element_id][1].get("aria-label")
+    for element_id in ("project-status", "project-sort"):
+        assert controls[element_id][0] == "select"
+        assert None not in parser.options[element_id]
+    assert {"all", "enabled", "paused", "closed", "unpublished"} <= set(parser.options["project-status"])
+    assert {"recent", "oldest", "target"} <= set(parser.options["project-sort"])
+
+
+@pytest.mark.asyncio
+async def test_project_list_preserves_multiple_states_without_writing(client):
+    c, app = client
+    cfg = app.state.cfg
+    for sid in ("web-active", "web-paused", "web-closed", "web-new"):
+        create_project(cfg, sid)
+    published_id = publish(cfg, "web-active")
+    conn = db.connect(cfg.data_dir)
+    try:
+        conn.execute("UPDATE projects SET agent_turn_active=1 WHERE session_id='web-active'")
+        conn.execute("UPDATE projects SET observer_paused=1 WHERE session_id='web-paused'")
+        conn.execute("UPDATE projects SET observation_enabled=0 WHERE session_id='web-closed'")
+        before = {
+            table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+            for table in ("projects", "tool_records", "observations")
+        }
+    finally:
+        conn.close()
+
+    response = await c.get("/web/projects")
+    assert response.status_code == 200
+    projects = {project["session_id"]: project for project in response.json()["projects"]}
+    assert set(projects) == {"web-active", "web-paused", "web-closed", "web-new"}
+    assert projects["web-active"]["agent_turn_active"] == 1
+    assert projects["web-active"]["current_observation_id"] == published_id
+    assert projects["web-active"]["current_status"] == "published"
+    assert projects["web-paused"]["observer_paused"] == 1
+    assert projects["web-closed"]["observation_enabled"] == 0
+    assert projects["web-new"]["current_observation_id"] is None
+    assert projects["web-new"]["current_status"] is None
+    for sid in projects:
+        detail = await c.get(f"/web/project/{sid}")
+        assert detail.status_code == 200
+        assert detail.json()["project"]["session_id"] == sid
+    assert (await c.get("/web/projects")).json() == response.json()
+
+    conn = db.connect(cfg.data_dir)
+    try:
+        after = {
+            table: [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+            for table in ("projects", "tool_records", "observations")
+        }
+    finally:
+        conn.close()
+    assert after == before
 
 
 @pytest.mark.asyncio
