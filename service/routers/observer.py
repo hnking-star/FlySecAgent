@@ -90,7 +90,13 @@ def _load_state(conn: sqlite3.Connection, project: sqlite3.Row) -> dict:
     if row is None or row["state_json"] is None:
         _raise(409, "invalid_blackboard", "current publication is unavailable")
     try:
-        return json.loads(row["state_json"])
+        state = json.loads(row["state_json"])
+        # apiIds 是 schema v1 的向后兼容扩展；旧快照按无关联 API 读取。
+        for item in state.get("assessments", []):
+            item.setdefault("apiIds", [])
+        for item in state.get("retired", []):
+            item.setdefault("apiIds", [])
+        return state
     except json.JSONDecodeError:
         _raise(409, "invalid_blackboard", "current publication is not valid JSON")
 
@@ -174,6 +180,14 @@ def _ctx_summary(
             out["attempts"] = attempts[-3:]
         assessments_out.append(out)
 
+    apis_out: list[dict[str, Any]] = []
+    for api in state.get("apis", []):
+        tests = api.get("tests", [])
+        out = dict(api)
+        out["tests_total"] = len(tests)
+        out["tests"] = tests[-3:]
+        apis_out.append(out)
+
     return {
         "project": {
             "target": project["target"],
@@ -199,6 +213,7 @@ def _ctx_summary(
             "last_change_summary": None,
         },
         "assessments": assessments_out,
+        "apis": apis_out,
         "guidance": state.get("guidance"),
         "last_errors": _last_errors(conn, session_id),
     }
@@ -441,6 +456,40 @@ def _validate_submit(
                     }
                 )
             seen_attempt_ids.add(att.id)
+        seen_api_refs: set[str] = set()
+        for ai, api_id in enumerate(u.apiIds):
+            if api_id in seen_api_refs:
+                errors.append(
+                    {
+                        "path": f"/upserts/{idx}/apiIds/{ai}",
+                        "code": "duplicate_id",
+                        "message": f"API 引用 {api_id!r} 在同一 upsert 中重复",
+                    }
+                )
+            seen_api_refs.add(api_id)
+
+    seen_api_ids: set[str] = set()
+    for idx, api in enumerate(payload.apis):
+        if api.id in seen_api_ids:
+            errors.append(
+                {
+                    "path": f"/apis/{idx}/id",
+                    "code": "duplicate_id",
+                    "message": f"API {api.id!r} 在本次提交中重复",
+                }
+            )
+        seen_api_ids.add(api.id)
+        seen_test_ids: set[str] = set()
+        for ti, test in enumerate(api.tests):
+            if test.id in seen_test_ids:
+                errors.append(
+                    {
+                        "path": f"/apis/{idx}/tests/{ti}/id",
+                        "code": "duplicate_id",
+                        "message": f"test {test.id!r} 在同一 API 中重复",
+                    }
+                )
+            seen_test_ids.add(test.id)
 
     # retireIds 存在性（必须在当前 assessments 或 retired 中）
     active_ids = {a["id"] for a in old_state.get("assessments", [])}
@@ -504,6 +553,20 @@ def _validate_submit(
         merged_ids.add(u.id)
     for rid in payload.retireIds:
         merged_ids.discard(rid)
+
+    # apiIds：允许引用旧 API，或本次 apis[] 同时新建的 API。
+    merged_api_ids = {api["id"] for api in old_state.get("apis", [])}
+    merged_api_ids.update(api.id for api in payload.apis)
+    for idx, u in enumerate(payload.upserts):
+        for ai, api_id in enumerate(u.apiIds):
+            if api_id not in merged_api_ids:
+                errors.append(
+                    {
+                        "path": f"/upserts/{idx}/apiIds/{ai}",
+                        "code": "unknown_api",
+                        "message": f"API {api_id!r} 不在当前黑板或本次 apis 中",
+                    }
+                )
 
     # 父节点存在性
     deps_map: dict[str, list[str]] = {}

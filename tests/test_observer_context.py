@@ -156,6 +156,7 @@ async def test_summary_truncates_attempts_to_three(client):
     a = r.json()["assessments"][0]
     assert a["attempts_total"] == 5
     assert [x["id"] for x in a["attempts"]] == ["a2", "a3", "a4"]
+    assert a["apiIds"] == []
 
 
 @pytest.mark.asyncio
@@ -184,6 +185,42 @@ async def test_summary_expands_requested_assessment(client):
     )
     a = r.json()["assessments"][0]
     assert len(a["attempts"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_summary_includes_api_ledger_and_recent_tests(client):
+    c, app = client
+    _ensure_project(app.state.cfg)
+    tests = [
+        {"id": f"t{i}", "action": f"test {i}", "result": "ok", "record_ids": [i + 1]}
+        for i in range(5)
+    ]
+    _publish_state(app.state.cfg, SESSION, {
+        "schema_version": 1, "revision": "rev-api",
+        "assessments": [{
+            "id": "page-assets", "subject": "页面资产", "status": "tried-hit",
+            "role": "direction", "conclusion": "发现接口", "basis": "record:1",
+            "uncertainty": None, "evidenceRefs": ["record:1"],
+            "attempts": [{"id": "discover", "action": "读取", "result": "ok",
+                          "evidenceRefs": ["record:1"]}],
+            "dependsOn": [], "apiIds": ["api-home"],
+        }],
+        "retired": [],
+        "apis": [{
+            "id": "api-home", "endpoint": "GET /", "purpose": "首页",
+            "parameters": [], "tests": tests,
+        }],
+        "guidance": {"hypothesis": None, "lock": None,
+                     "angleIds": [], "confirmedIds": [], "tension": []},
+    })
+
+    response = await c.post(
+        "/observer/context", headers=_hdr(app), json={"mode": "summary"}
+    )
+    body = response.json()
+    assert body["assessments"][0]["apiIds"] == ["api-home"]
+    assert body["apis"][0]["tests_total"] == 5
+    assert [test["id"] for test in body["apis"][0]["tests"]] == ["t2", "t3", "t4"]
 
 
 # ---------------------------------------------------------------------------

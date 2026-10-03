@@ -10,20 +10,7 @@
   <div class="ambient ambient-one"></div>
   <div class="ambient ambient-two"></div>
 
-  <div id="auth" class="auth-layer">
-    <form id="auth-form" class="auth-card">
-      <div class="brand-mark">F</div>
-      <p class="eyebrow">LOCAL OBSERVATION SERVICE</p>
-      <h1>FlySecAgent</h1>
-      <p>输入本机服务令牌，查看只读黑板。令牌仅保存在当前页面内存中。</p>
-      <label for="token">访问令牌</label>
-      <input id="token" name="token" type="password" autocomplete="off" required>
-      <button type="submit" class="primary">进入黑板</button>
-      <p id="auth-error" class="error" role="alert"></p>
-    </form>
-  </div>
-
-  <main id="app" class="shell hidden">
+  <main id="app" class="shell">
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark small">F</div>
@@ -38,7 +25,6 @@
         </label>
         <button id="refresh" type="button">刷新</button>
         <button id="report" type="button">报告</button>
-        <button id="lock" type="button" class="quiet">锁定</button>
         <span id="connection" class="connection"><i></i> 已连接</span>
       </div>
     </header>

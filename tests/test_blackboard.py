@@ -20,7 +20,6 @@ def _asmt(**overrides):
         subject="auth recon",
         status="tried-hit",
         role="direction",
-        api=None,
         conclusion="found /api/login",
         basis="record:1 列出路径",
         uncertainty=None,
@@ -28,6 +27,7 @@ def _asmt(**overrides):
         attempts=[Attempt(id="crawl", action="爬 /api", result="ok",
                           evidenceRefs=["record:1"])],
         dependsOn=[],
+        apiIds=[],
     )
     base.update(overrides)
     return Assessment(**base)
@@ -101,6 +101,25 @@ def test_merge_apis_dedup_by_id_params_union():
     assert sorted(p["name"] for p in api["parameters"]) == ["a", "b"]
     assert [p for p in api["parameters"] if p["name"] == "a"][0]["description"] == "first"
     assert sorted(t["id"] for t in api["tests"]) == ["t1", "t2"]
+
+
+def test_node_api_links_survive_later_api_test_append():
+    node = _asmt(apiIds=["api-1"])
+    discovered = ApiEntry(
+        id="api-1", endpoint="GET /api/x", purpose="x", parameters=[], tests=[]
+    )
+    state = blackboard.merge(
+        blackboard.initial_state(), _submit(upserts=[node], apis=[discovered])
+    ).new_state
+
+    tested = ApiEntry(
+        id="api-1", endpoint="GET /api/x", purpose="x", parameters=[],
+        tests=[ApiTest(id="idor", action="replace id", result="blocked", record_ids=[2])],
+    )
+    state = blackboard.merge(state, _submit(apis=[tested])).new_state
+
+    assert state["assessments"][0]["apiIds"] == ["api-1"]
+    assert [test["id"] for test in state["apis"][0]["tests"]] == ["idor"]
 
 
 def test_merge_detects_conflicting_attempt():

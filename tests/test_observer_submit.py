@@ -57,6 +57,7 @@ def _basic_asmt(
     attempts: list | None = None,
     evidence: str = "record:1",
     dependsOn: list[str] | None = None,
+    apiIds: list[str] | None = None,
 ) -> dict:
     return {
         "id": id_,
@@ -82,6 +83,7 @@ def _basic_asmt(
             else []
         ),
         "dependsOn": dependsOn or [],
+        "apiIds": apiIds or [],
     }
 
 
@@ -455,6 +457,129 @@ async def test_submit_reserved_id(client):
     body = r.json()
     assert body["ok"] is False
     assert body["errors"][0]["code"] == "reserved_id"
+
+
+# ---------------------------------------------------------------------------
+# API 关联与测试追加
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_submit_node_links_api_and_later_tests_append(client):
+    c, app = client
+    _ensure_project(app.state.cfg)
+    first_record = _insert_records(app.state.cfg, SESSION, 1)[0]
+
+    first = await c.post(
+        "/observer/submit",
+        headers=_hdr(app),
+        json={
+            "baseRevision": None,
+            "upserts": [
+                _basic_asmt(
+                    evidence=f"record:{first_record}", apiIds=["api-user"]
+                )
+            ],
+            "apis": [
+                {
+                    "id": "api-user",
+                    "endpoint": "GET /api/user",
+                    "purpose": "查询用户",
+                    "parameters": [{"name": "id"}],
+                    "tests": [],
+                }
+            ],
+        },
+    )
+    assert first.json()["ok"] is True
+
+    second_record = _insert_records(app.state.cfg, SESSION, 1)[0]
+    second = await c.post(
+        "/observer/submit",
+        headers=_hdr(app),
+        json={
+            "baseRevision": first.json()["revision"],
+            "apis": [
+                {
+                    "id": "api-user",
+                    "endpoint": "GET /api/user",
+                    "purpose": "查询用户",
+                    "parameters": [{"name": "id"}],
+                    "tests": [
+                        {
+                            "id": "idor",
+                            "action": "把 id 从 123 替换为 456",
+                            "result": "返回其他用户信息",
+                            "record_ids": [second_record],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert second.json()["ok"] is True
+
+    third_record = _insert_records(app.state.cfg, SESSION, 1)[0]
+    third = await c.post(
+        "/observer/submit",
+        headers=_hdr(app),
+        json={
+            "baseRevision": second.json()["revision"],
+            "apis": [
+                {
+                    "id": "api-user",
+                    "endpoint": "GET /api/user",
+                    "purpose": "查询用户",
+                    "parameters": [{"name": "id"}],
+                    "tests": [
+                        {
+                            "id": "sqli",
+                            "action": "把 id 替换为单引号 payload",
+                            "result": "返回参数错误",
+                            "record_ids": [third_record],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    assert third.json()["ok"] is True
+
+    conn = db.connect(app.state.cfg.data_dir)
+    try:
+        row = conn.execute(
+            "SELECT state_json FROM observations WHERE session_id=? "
+            "AND status='published' ORDER BY id DESC LIMIT 1",
+            (SESSION,),
+        ).fetchone()
+        state = json.loads(row["state_json"])
+    finally:
+        conn.close()
+    assert state["assessments"][0]["apiIds"] == ["api-user"]
+    assert [test["id"] for test in state["apis"][0]["tests"]] == ["idor", "sqli"]
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_unknown_api_reference(client):
+    c, app = client
+    _ensure_project(app.state.cfg)
+    record_id = _insert_records(app.state.cfg, SESSION, 1)[0]
+
+    response = await c.post(
+        "/observer/submit",
+        headers=_hdr(app),
+        json={
+            "baseRevision": None,
+            "upserts": [
+                _basic_asmt(evidence=f"record:{record_id}", apiIds=["missing-api"])
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["errors"][0]["code"] == "unknown_api"
+    assert body["errors"][0]["path"] == "/upserts/0/apiIds/0"
 
 
 # ---------------------------------------------------------------------------

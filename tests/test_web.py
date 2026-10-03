@@ -10,10 +10,6 @@ import pytest
 from service import db
 
 
-def headers(app):
-    return {"X-FlySec-Token": app.state.service_token}
-
-
 def create_project(cfg, sid="web-a"):
     conn = db.connect(cfg.data_dir)
     try:
@@ -35,7 +31,7 @@ def publish(cfg, sid="web-a", revision="rev-1", script_text="safe"):
             "uncertainty": None, "evidenceRefs": ["record:1"],
             "attempts": [{"id": "try-1", "action": "读取", "result": script_text,
                           "assessment": None, "evidenceRefs": ["record:1"]}],
-            "dependsOn": [],
+            "dependsOn": [], "apiIds": ["api-1"],
         }],
         "retired": [],
         "apis": [{"id": "api-1", "endpoint": "GET /api/demo", "purpose": script_text,
@@ -74,7 +70,7 @@ def publish(cfg, sid="web-a", revision="rev-1", script_text="safe"):
 
 
 @pytest.mark.asyncio
-async def test_static_shell_is_public_but_api_requires_token(client):
+async def test_web_shell_and_read_only_apis_are_public_on_loopback(client):
     c, _ = client
     page = await c.get("/web/")
     assert page.status_code == 200
@@ -83,20 +79,20 @@ async def test_static_shell_is_public_but_api_requires_token(client):
     assert page.headers["cache-control"] == "no-store"
     assert (await c.get("/web/app.js")).status_code == 200
     assert (await c.get("/web/styles.css")).status_code == 200
-    assert (await c.get("/web/projects")).status_code == 401
+    assert (await c.get("/web/projects")).status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_projects_and_empty_state(client):
     c, app = client
     create_project(app.state.cfg)
-    projects = await c.get("/web/projects", headers=headers(app))
+    projects = await c.get("/web/projects")
     assert projects.status_code == 200
     assert projects.json()["projects"][0]["session_id"] == "web-a"
-    project = await c.get("/web/project/web-a", headers=headers(app))
+    project = await c.get("/web/project/web-a")
     assert project.status_code == 200
     assert project.json()["state"] is None
-    report = await c.get("/web/report/web-a", headers=headers(app))
+    report = await c.get("/web/report/web-a")
     assert "尚未生成黑板" in report.text
 
 
@@ -105,17 +101,19 @@ async def test_published_project_record_logs_and_report(client):
     c, app = client
     create_project(app.state.cfg)
     obs_id = publish(app.state.cfg)
-    project = (await c.get("/web/project/web-a", headers=headers(app))).json()
+    project = (await c.get("/web/project/web-a")).json()
     assert project["state"]["revision"] == "rev-1"
     assert project["state"]["apis"][0]["endpoint"] == "GET /api/demo"
     assert project["observation"]["id"] == obs_id
-    record = await c.get("/web/record/web-a/1", headers=headers(app))
+    record = await c.get("/web/record/web-a/1")
     assert record.json()["record"]["tool_response"] == {"text": "safe"}
-    logs = await c.get(f"/web/observation/web-a/{obs_id}/logs", headers=headers(app))
+    logs = await c.get(f"/web/observation/web-a/{obs_id}/logs")
     assert logs.json()["logs"][0]["op"] == "observation_context"
-    report = await c.get("/web/report/web-a", headers=headers(app))
+    report = await c.get("/web/report/web-a")
     assert report.headers["content-type"].startswith("text/markdown")
     assert "GET /api/demo" in report.text
+    assert "关联 API：GET /api/demo" in report.text
+    assert "关联判断：" in report.text
     assert "record:1" in report.text
 
 
@@ -125,10 +123,10 @@ async def test_historical_version_is_scoped_and_selectable(client):
     create_project(app.state.cfg)
     old_id = publish(app.state.cfg, revision="old")
     new_id = publish(app.state.cfg, revision="new")
-    current = await c.get("/web/project/web-a", headers=headers(app))
+    current = await c.get("/web/project/web-a")
     assert current.json()["state"]["revision"] == "new"
     old = await c.get(
-        "/web/project/web-a", params={"observation_id": old_id}, headers=headers(app)
+        "/web/project/web-a", params={"observation_id": old_id}
     )
     assert old.json()["state"]["revision"] == "old"
     assert new_id != old_id
@@ -140,9 +138,9 @@ async def test_cross_session_record_and_observation_are_hidden(client):
     create_project(app.state.cfg, "web-a")
     create_project(app.state.cfg, "web-b")
     obs_id = publish(app.state.cfg, "web-a")
-    assert (await c.get("/web/record/web-b/1", headers=headers(app))).status_code == 404
+    assert (await c.get("/web/record/web-b/1")).status_code == 404
     assert (
-        await c.get(f"/web/observation/web-b/{obs_id}/logs", headers=headers(app))
+        await c.get(f"/web/observation/web-b/{obs_id}/logs")
     ).status_code == 404
 
 
@@ -150,6 +148,11 @@ def test_frontend_never_uses_inner_html_for_data():
     source = (Path(__file__).resolve().parent.parent / "web/app.js").read_text()
     assert "innerHTML" not in source
     assert "textContent" in source
+    assert "renderRelatedApis" in source
+    assert "assessment.apiIds" in source
+    assert '"api-summary"' in source
+    assert 'setAttribute("aria-expanded"' in source
+    assert "expandedApiId" in source
 
 
 @pytest.mark.asyncio
@@ -158,7 +161,7 @@ async def test_script_like_text_round_trips_as_data(client):
     create_project(app.state.cfg)
     payload = '<script>globalThis.pwned=true</script><img src=x onerror=alert(1)>'
     publish(app.state.cfg, script_text=payload)
-    project = await c.get("/web/project/web-a", headers=headers(app))
+    project = await c.get("/web/project/web-a")
     assert project.json()["state"]["assessments"][0]["subject"] == payload
-    report = await c.get("/web/report/web-a", headers=headers(app))
+    report = await c.get("/web/report/web-a")
     assert payload in report.text

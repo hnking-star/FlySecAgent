@@ -35,14 +35,15 @@ VERSION = "0.1.0"
 # body 顶层不允许出现的身份字段（防越权）。
 _FORBIDDEN_IDENTITY_KEYS = {"session_id", "project_id", "sessionId", "projectId"}
 
-# 需要服务级 token 的路由前缀。
-_SERVICE_TOKEN_PREFIXES = ("/hook/", "/control/", "/web/")
+# 需要服务级 token 的路由前缀。Web 是 loopback-only 的只读页面，不要求 token。
+_SERVICE_TOKEN_PREFIXES = ("/hook/", "/control/")
 
 # 需要会话级 token 的路由前缀。
 _SESSION_TOKEN_PREFIXES = ("/observer/",)
 
 # 不鉴权的路由。
 _PUBLIC_PATHS = {"/health", "/web/", "/web/app.js", "/web/styles.css"}
+_PUBLIC_PREFIXES = ("/web/",)
 
 
 def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
@@ -207,7 +208,7 @@ async def _authorize(
         return _reject(403, "non_loopback", "only loopback requests are allowed")
 
     path = request.url.path
-    if path in _PUBLIC_PATHS:
+    if path in _PUBLIC_PATHS or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
         return None
 
     if any(path.startswith(prefix) for prefix in _SERVICE_TOKEN_PREFIXES):

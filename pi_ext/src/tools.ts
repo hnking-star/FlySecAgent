@@ -53,13 +53,13 @@ const AssessmentSchema = Type.Object(
         Type.Literal("path"),
       ]),
     ),
-    api: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     conclusion: Type.String(),
     basis: Type.String(),
     uncertainty: Type.Union([Type.String(), Type.Null()]),
     evidenceRefs: Type.Array(Type.String(), { minItems: 1, maxItems: 16 }),
     attempts: Type.Optional(Type.Array(AttemptSchema, { maxItems: 20 })),
     dependsOn: Type.Optional(Type.Array(Type.String(), { maxItems: 16 })),
+    apiIds: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })),
   },
   { additionalProperties: false },
 );
@@ -139,7 +139,7 @@ export function createObservationTools(client: ObserverClient): ObservationTools
     name: "observation_context",
     label: "Observation context",
     description:
-      "Read FlySecAgent observation context. mode=summary (default) gives project / window / records_overview / blackboard revision / assessments / guidance / last_errors. Other modes: window_records, record_detail(record_id, offset?, length?), blackboard, history_record(record_id).",
+      "Read FlySecAgent observation context. mode=summary (default) gives project / window / records_overview / blackboard revision / assessments / API ledger summaries / guidance / last_errors. Other modes: window_records, record_detail(record_id, offset?, length?), blackboard, history_record(record_id).",
     parameters: ContextSchema,
     execute: async (_id, args) => {
       const result = await client.context(args);
@@ -151,7 +151,7 @@ export function createObservationTools(client: ObserverClient): ObservationTools
     name: "observation_submit",
     label: "Submit observation",
     description:
-      "Submit a flat observation increment. Fields: baseRevision (null first time, must equal the last observation_context revision thereafter); upserts[] of {id, subject, status, role?, conclusion, basis, uncertainty, evidenceRefs, attempts?, dependsOn?}; retireIds[]; apis[] of {id, endpoint, purpose, parameters?, tests?}; guidance{hypothesis?, lock?, angleIds?, confirmedIds?, tension?}. On ok:false, read errors[].code and retry in the same window; the round only ends after ok:true.",
+      "Submit a flat observation increment. Fields: baseRevision (null first time, must equal the last observation_context revision thereafter); upserts[] of {id, subject, status, role?, conclusion, basis, uncertainty, evidenceRefs, attempts?, dependsOn?, apiIds?}; retireIds[]; apis[] of {id, endpoint, purpose, parameters?, tests?}. apiIds must reference API IDs already on the blackboard or included in the same submission. API tests append by stable test.id. guidance{hypothesis?, lock?, angleIds?, confirmedIds?, tension?}. On ok:false, read errors[].code and retry in the same window; the round only ends after ok:true.",
     parameters: SubmitSchema,
     executionMode: "sequential",
     execute: async (_id, args) => {

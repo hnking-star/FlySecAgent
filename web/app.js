@@ -1,12 +1,12 @@
 (() => {
   "use strict";
-  let token = "";
   let selectedSession = "";
   let selectedObservation = null;
   let current = null;
   let graphFilter = "all";
   let apiQuery = "";
   let apiMode = "all";
+  let expandedApiId = null;
   let selectedNodeId = null;
   const $ = (id) => document.getElementById(id);
   const STATUS_LABELS = {
@@ -34,10 +34,7 @@
   }
 
   async function request(path, options = {}) {
-    const headers = new Headers(options.headers || {});
-    headers.set("X-FlySec-Token", token);
-    const response = await fetch(path, { ...options, headers });
-    if (response.status === 401) throw new Error("访问令牌无效");
+    const response = await fetch(path, options);
     if (!response.ok) {
       let body = {};
       try { body = await response.json(); } catch (_) { /* ignored */ }
@@ -50,17 +47,6 @@
 
   function statusKind(status) {
     return Object.prototype.hasOwnProperty.call(STATUS_LABELS, status) ? status : "off";
-  }
-
-  async function unlock(value) {
-    token = value;
-    setLoading(true);
-    try {
-      const body = await (await request("/web/projects")).json();
-      $("auth").classList.add("hidden");
-      $("app").classList.remove("hidden");
-      await renderProjects(body.projects);
-    } finally { setLoading(false); }
   }
 
   async function renderProjects(projects, preferredSession = "") {
@@ -95,7 +81,7 @@
   }
 
   function resetFilters() {
-    graphFilter = "all"; apiQuery = ""; apiMode = "all"; selectedNodeId = null;
+    graphFilter = "all"; apiQuery = ""; apiMode = "all"; expandedApiId = null; selectedNodeId = null;
     $("api-search").value = ""; $("api-filter").value = "all";
   }
 
@@ -256,11 +242,44 @@
     const box = $("assessment-detail"); box.className = "assessment-content"; box.replaceChildren();
     const title = el("div", "detail-title"); title.append(el("h3", "", item.subject), el("span", `status ${statusKind(item.status)}`, statusLabel(item.status))); box.append(title);
     section(box, "结论", item.conclusion); section(box, "依据", item.basis); section(box, "不确定性", item.uncertainty || "无");
+    renderRelatedApis(box, item, current?.state?.apis || []);
     const refs = el("div", "evidence-list"); for (const ref of item.evidenceRefs || []) refs.append(recordButton(ref));
     const wrap = el("div", "detail-section"); wrap.append(el("h4", "", "证据"), refs); box.append(wrap);
     const attempts = el("div", "detail-section"); attempts.append(el("h4", "", `尝试 ${(item.attempts || []).length}`));
     for (const attempt of item.attempts || []) { const row = el("div", "attempt"); row.append(el("strong", "", attempt.action), el("p", "", attempt.result)); const refs = el("div", "evidence-list"); for (const ref of attempt.evidenceRefs || []) refs.append(recordButton(ref)); row.append(refs); attempts.append(row); }
     if (!(item.attempts || []).length) attempts.append(el("p", "muted", "尚无实际尝试。")); box.append(attempts);
+  }
+
+  function renderRelatedApis(parent, assessment, apis) {
+    const ids = new Set(assessment.apiIds || []);
+    let related = apis.filter((api) => ids.has(api.id));
+    if (!related.length && assessment.api) related = apis.filter((api) => api.endpoint === assessment.api);
+    const wrap = el("div", "detail-section related-apis");
+    wrap.append(el("h4", "", `关联 API ${related.length}`));
+    if (!related.length) {
+      wrap.append(el("p", "muted", "当前节点还没有关联 API。")); parent.append(wrap); return;
+    }
+    for (const api of related) {
+      const card = el("article", "related-api"), head = el("div", "related-api-head");
+      const endpoint = String(api.endpoint), separator = endpoint.indexOf(" ");
+      const method = separator > 0 ? endpoint.slice(0, separator) : "API";
+      const path = separator > 0 ? endpoint.slice(separator + 1) : endpoint;
+      head.append(el("span", "method", method), el("strong", "", path), badge(`${(api.tests || []).length} 测试`, (api.tests || []).length ? "ok" : "warn"));
+      card.append(head, el("p", "", api.purpose));
+      const params = api.parameters || [];
+      if (params.length) {
+        const tags = el("div", "tags"); params.forEach((param) => tags.append(el("span", "tag", param.name))); card.append(tags);
+      }
+      if (!(api.tests || []).length) card.append(el("p", "related-api-empty", "已发现，尚未进行测试。"));
+      for (const test of api.tests || []) {
+        const testRow = el("div", "related-api-test");
+        testRow.append(el("strong", "", test.action), el("p", "", test.result));
+        const refs = el("div", "evidence-list"); for (const id of test.record_ids || []) refs.append(recordButton(id));
+        testRow.append(refs); card.append(testRow);
+      }
+      wrap.append(card);
+    }
+    parent.append(wrap);
   }
 
   function section(parent, title, value) { const node = el("div", "detail-section"); node.append(el("h4", "", title), el("p", "", value)); parent.append(node); }
@@ -279,17 +298,48 @@
     $("api-count").textContent = `${filtered.length}/${apis.length} 个端点`;
     const target = $("api-list"); target.replaceChildren();
     if (!filtered.length) { target.append(el("p", "placeholder", "当前筛选没有 API。")); return; }
+    const columns = el("div", "api-table-head");
+    columns.append(el("span", "", "方法"), el("span", "", "端点与用途"), el("span", "", "参数"), el("span", "", "测试"), el("span", "", ""));
+    target.append(columns);
     for (const api of filtered) {
-      const card = el("article", "api-card"), header = el("div", "api-head");
+      const isOpen = expandedApiId === api.id;
+      const row = el("article", `api-row ${isOpen ? "open" : ""}`);
       const endpoint = String(api.endpoint), separator = endpoint.indexOf(" ");
       const method = separator > 0 ? endpoint.slice(0, separator) : "API";
       const path = separator > 0 ? endpoint.slice(separator + 1) : endpoint;
-      header.append(el("span", "method", method), el("strong", "endpoint", path), badge(`${(api.tests || []).length} 测试`, (api.tests || []).length ? "ok" : "warn")); card.append(header, el("p", "api-purpose", api.purpose));
-      const tags = el("div", "tags"); for (const param of api.parameters || []) tags.append(el("span", "tag", param.description ? `${param.name} · ${param.description}` : param.name)); if (!(api.parameters || []).length) tags.append(el("span", "tag", "无已知参数")); card.append(tags);
+      const summary = el("button", "api-summary"); summary.type = "button";
+      summary.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      summary.setAttribute("aria-controls", `api-details-${api.id}`);
+      const identity = el("span", "api-identity");
+      const endpointNode = el("strong", "endpoint", path); endpointNode.title = path;
+      identity.append(endpointNode, el("small", "api-purpose", api.purpose));
       const tests = api.tests || [];
-      if (!tests.length) card.append(el("p", "empty-test", "尚无测试记录"));
-      for (const test of tests) { const row = el("div", "api-test"); row.append(el("strong", "", test.action), el("p", "", test.result)); const refs = el("div", "evidence-list"); for (const id of test.record_ids || []) refs.append(recordButton(id)); row.append(refs); card.append(row); }
-      target.append(card);
+      summary.append(
+        el("span", "method", method),
+        identity,
+        el("span", "api-param-count", `${(api.parameters || []).length} 个`),
+        badge(`${tests.length} 条`, tests.length ? "ok" : "warn"),
+        el("span", "api-chevron", "⌄"),
+      );
+      summary.addEventListener("click", () => { expandedApiId = isOpen ? null : api.id; renderApis(apis); });
+      row.append(summary);
+      if (isOpen) {
+        const details = el("div", "api-details"); details.id = `api-details-${api.id}`;
+        const paramBlock = el("section", "api-detail-block"); paramBlock.append(el("h3", "", "参数"));
+        const tags = el("div", "tags");
+        for (const param of api.parameters || []) tags.append(el("span", "tag", param.description ? `${param.name} · ${param.description}` : param.name));
+        if (!(api.parameters || []).length) tags.append(el("span", "tag", "无已知参数"));
+        paramBlock.append(tags); details.append(paramBlock);
+        const testBlock = el("section", "api-detail-block"); testBlock.append(el("h3", "", `测试记录 ${tests.length}`));
+        if (!tests.length) testBlock.append(el("p", "empty-test", "尚无测试记录"));
+        for (const test of tests) {
+          const testRow = el("div", "api-test"); testRow.append(el("strong", "", test.action), el("p", "", test.result));
+          const refs = el("div", "evidence-list"); for (const id of test.record_ids || []) refs.append(recordButton(id));
+          testRow.append(refs); testBlock.append(testRow);
+        }
+        details.append(testBlock); row.append(details);
+      }
+      target.append(row);
     }
   }
 
@@ -327,7 +377,6 @@
   function showError(error) { $("record-detail").className = "evidence-view error"; $("record-detail").textContent = `错误：${error.message}`; toast(error.message, true); }
   let toastTimer; function toast(message, bad = false) { const node = $("toast"); node.textContent = message; node.className = `toast show ${bad ? "bad" : ""}`; clearTimeout(toastTimer); toastTimer = setTimeout(() => node.className = "toast", 2200); }
 
-  $("auth-form").addEventListener("submit", async (event) => { event.preventDefault(); $("auth-error").textContent = ""; try { await unlock($("token").value); } catch (error) { $("auth-error").textContent = error.message; } });
   $("project-select").addEventListener("change", () => { resetFilters(); loadProject(); });
   $("version-select").addEventListener("change", (event) => loadProject(event.target.value || null));
   $("refresh").addEventListener("click", refreshProjects);
@@ -340,5 +389,5 @@
     catch (_) { toast("浏览器未允许复制，请手工选择文本", true); }
   });
   $("close-report").addEventListener("click", () => $("report-dialog").close());
-  $("lock").addEventListener("click", () => { token = ""; current = null; $("app").classList.add("hidden"); $("auth").classList.remove("hidden"); $("token").value = ""; });
+  refreshProjects();
 })();

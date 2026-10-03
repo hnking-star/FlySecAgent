@@ -11,6 +11,7 @@
    - 当前黑板 revision（提交时必须用这个值作 baseRevision）
    - 固定窗口的记录分布
    - 现有判断（含最近 3 条尝试）
+   - 现有 API 台账（含最近 3 条测试和 tests_total）
    - 上轮如有提交失败，`errors[]` 会原样回传
 
 2. 需要原文时按需调用：
@@ -27,11 +28,16 @@
    - `dependsOn` 表达“这个判断是从哪个已有判断继续发现/验证出来的”，不是时间顺序：
      独立测试方向才允许空数组；从资产、路径、接口或前置判断继续分析得到的节点，必须填写父判断稳定 ID。
      例如“/s.js 脚本安全分析”应依赖“页面与前端资产盘点”，不要把二者都提交成顶层节点
+   - 每个判断都要用 `apiIds` 写出它发现或测试的 API 稳定 ID；没有关联 API 时传空数组。
+     新发现 API 时，在同一次提交的 `apis[]` 创建 API，并把它的 ID 放入对应判断的 `apiIds`。
+     同一 API 可以被多个判断引用；更新判断时传该判断完整的 `apiIds` 集合
    - `evidenceRefs` 使用 `record:<tool_records.id>` 字符串；`tests.record_ids` 使用整数 ID，
      并且必须真实存在于本会话；禁止编造证据引用
    - `inferred-open` 允许 `attempts=[]`；`tried-*` 和 `scan-class` 必须附至少一条真实 attempt
-   - API 在 `apis[]` 中登记；首次发现只写 `endpoint` / `purpose` / `parameters`
-     后续测试追加 `tests`；同一 endpoint 不重复新建，不覆盖旧测试
+   - API 在 `apis[]` 中登记；首次发现写 `endpoint` / `purpose` / `parameters`，`tests` 可为空。
+     后续从新 record 看到主 Agent 的测试时，复用原 API ID，并在 `tests` 里提交一个新的稳定 test ID；
+     `action` 写如何测试，`result` 写结果，`record_ids` 写真实证据。服务端按 test ID 追加合并，
+     不会覆盖旧测试；同一 endpoint 不重复新建。Observer 只整理 Agent 已执行的测试，自己不执行
    - `uncertainty` 没有不确定性时传 `null`，不要瞎编
 
 4. 调 `observation_submit({baseRevision, upserts, retireIds, apis, guidance})`：
@@ -43,6 +49,7 @@
      - `missing_attempt`    → 为 `tried-*` 补上真实 attempt
      - `conflicting_update` → 用新 ID 或显式修正旧 attempt
      - `duplicate_id`       → 同一次提交合并同 ID 的项
+     - `unknown_api`        → 修正 apiIds，或在同次 apis 中补建对应 API
      - `cycle`              → 调整 dependsOn
      - `schema_invalid`     → 按 `path` 指出的字段修复
      在同一窗口持续修正直到 `ok:true`

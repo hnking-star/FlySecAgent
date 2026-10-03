@@ -129,13 +129,13 @@ class Assessment(BaseModel):
     subject: Subject120
     status: Literal["inferred-open", "tried-hit", "tried-miss", "scan-class"]
     role: Literal["direction", "endpoint", "path"] = "direction"
-    api: str | None = Field(None, max_length=120)
     conclusion: Conclusion600
     basis: Basis1200
     uncertainty: str | None = Field(..., max_length=1200)
     evidenceRefs: list[EvidenceRef] = Field(min_length=1, max_length=16)
     attempts: list[Attempt] = Field(default_factory=list, max_length=20)
     dependsOn: list[IdStr] = Field(default_factory=list, max_length=16)
+    apiIds: list[IdStr] = Field(default_factory=list, max_length=32)
 
     @model_validator(mode="after")
     def _check_attempts(self):

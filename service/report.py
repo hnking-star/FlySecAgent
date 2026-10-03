@@ -11,6 +11,11 @@ def render_report(project: dict, observation: dict | None, state: dict | None) -
 
     assessments = state.get("assessments", [])
     apis = state.get("apis", [])
+    apis_by_id = {api.get("id"): api for api in apis}
+    assessments_by_api: dict[str, list[dict]] = {}
+    for assessment in assessments:
+        for api_id in assessment.get("apiIds", []):
+            assessments_by_api.setdefault(api_id, []).append(assessment)
     guidance = state.get("guidance", {}) or {}
     statuses = Counter(item.get("status", "unknown") for item in assessments)
     untested = [api for api in apis if not api.get("tests")]
@@ -37,7 +42,7 @@ def render_report(project: dict, observation: dict | None, state: dict | None) -
     if not selected:
         lines.append("（无）")
     for item in selected:
-        lines.extend(_assessment_lines(item))
+        lines.extend(_assessment_lines(item, apis_by_id))
 
     lines.extend(["", "## 待验证方向", ""])
     pending = [a for a in assessments if a.get("id") in angles]
@@ -53,6 +58,8 @@ def render_report(project: dict, observation: dict | None, state: dict | None) -
         lines.extend([f"### {api.get('endpoint')} · {api.get('purpose')}", ""])
         params = api.get("parameters", [])
         lines.append("- 参数：" + (", ".join(p.get("name", "?") for p in params) if params else "无已知参数"))
+        related = assessments_by_api.get(api.get("id"), [])
+        lines.append("- 关联判断：" + (", ".join(f"{item.get('subject')}（{item.get('id')}）" for item in related) if related else "无"))
         tests = api.get("tests", [])
         if not tests:
             lines.append("- 测试：尚无测试记录")
@@ -73,7 +80,8 @@ def render_report(project: dict, observation: dict | None, state: dict | None) -
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _assessment_lines(item: dict) -> list[str]:
+def _assessment_lines(item: dict, apis_by_id: dict[str, dict]) -> list[str]:
+    related = [apis_by_id[api_id] for api_id in item.get("apiIds", []) if api_id in apis_by_id]
     lines = [
         f"### {item.get('subject')}（{item.get('id')}）",
         "",
@@ -81,6 +89,7 @@ def _assessment_lines(item: dict) -> list[str]:
         f"- 结论：{item.get('conclusion')}",
         f"- 依据：{item.get('basis')}",
         f"- 不确定性：{item.get('uncertainty') or '无'}",
+        "- 关联 API：" + (", ".join(api.get("endpoint", api.get("id", "?")) for api in related) if related else "无"),
         "- 证据：" + ", ".join(item.get("evidenceRefs", [])),
     ]
     for attempt in item.get("attempts", []):
