@@ -42,7 +42,7 @@ _SERVICE_TOKEN_PREFIXES = ("/hook/", "/control/", "/web/")
 _SESSION_TOKEN_PREFIXES = ("/observer/",)
 
 # 不鉴权的路由。
-_PUBLIC_PATHS = {"/health"}
+_PUBLIC_PATHS = {"/health", "/web/", "/web/app.js", "/web/styles.css"}
 
 
 def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
@@ -145,11 +145,12 @@ def _register_health(app: FastAPI) -> None:
 
 def _register_routers(app: FastAPI) -> None:
     """挂真正的业务 router。"""
-    from .routers import control, hook, observer
+    from .routers import control, hook, observer, web
 
     app.include_router(hook.router)
     app.include_router(observer.router)
     app.include_router(control.router)
+    app.include_router(web.router)
     app.state.submit_cache = observer.SubmitCache()
 
 
@@ -181,6 +182,16 @@ async def _handle(
             return guard
 
         response = await call_next(request)
+        if request.url.path.startswith("/web"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "connect-src 'self'; img-src 'self' data:; object-src 'none'; "
+                "base-uri 'none'; frame-ancestors 'none'"
+            )
         status = response.status_code
         return response
     finally:

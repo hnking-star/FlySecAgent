@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FlySecAgent Blackboard</title>
+  <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <div id="auth" class="auth-layer">
+    <form id="auth-form" class="auth-card">
+      <div class="brand-mark">F</div>
+      <p class="eyebrow">LOCAL OBSERVATION SERVICE</p>
+      <h1>FlySecAgent</h1>
+      <p>输入本机服务令牌，查看只读黑板。令牌仅保存在当前页面内存中。</p>
+      <label for="token">访问令牌</label>
+      <input id="token" name="token" type="password" autocomplete="off" required>
+      <button type="submit" class="primary">进入黑板</button>
+      <p id="auth-error" class="error" role="alert"></p>
+    </form>
+  </div>
+
+  <main id="app" class="shell hidden">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark small">F</div>
+        <div><p class="eyebrow">OBSERVER BLACKBOARD</p><h1>FlySecAgent <span class="title-muted">/ Control Surface</span></h1></div>
+      </div>
+      <div class="toolbar">
+        <label class="select-label">项目
+          <select id="project-select"></select>
+        </label>
+        <label class="select-label">版本
+          <select id="version-select"></select>
+        </label>
+        <button id="refresh" type="button">刷新</button>
+        <button id="report" type="button">报告</button>
+        <button id="lock" type="button" class="quiet">锁定</button>
+        <span id="connection" class="connection"><i></i> 已连接</span>
+      </div>
+    </header>
+
+    <div id="overview" class="overview"></div>
+
+    <section id="empty" class="empty hidden">
+      <span class="empty-icon">◎</span>
+      <h2 id="empty-title">尚未生成黑板</h2>
+      <p id="empty-message">项目已经存在，但 Observer 还没有发布有效快照。</p>
+    </section>
+
+    <section id="content" class="hidden">
+      <div class="main-grid">
+        <section class="panel graph-panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">EXPLORATION</p><h2>探索图</h2></div>
+            <div class="panel-tools"><div id="graph-filters" class="filter-group" aria-label="判断状态筛选"></div><span id="graph-count" class="metric"></span></div>
+          </div>
+          <div id="graph" class="graph" aria-label="探索图"></div>
+        </section>
+
+        <aside class="panel detail-panel">
+          <div class="panel-head"><div><p class="eyebrow">INSPECTOR</p><h2>节点详情</h2></div></div>
+          <div id="assessment-detail" class="placeholder">点击图中的节点查看判断、尝试和证据。</div>
+        </aside>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div><p class="eyebrow">ENDPOINT LEDGER</p><h2>API 台账</h2></div>
+          <div class="panel-tools">
+            <input id="api-search" class="compact-input" type="search" placeholder="搜索端点、用途、参数">
+            <select id="api-filter" class="compact-select" aria-label="API 测试状态"><option value="all">全部</option><option value="tested">已测试</option><option value="untested">未测试</option></select>
+            <span id="api-count" class="metric"></span>
+          </div>
+        </div>
+        <div id="api-list" class="api-list"></div>
+      </section>
+
+      <div class="bottom-grid">
+        <section class="panel">
+          <div class="panel-head"><div><p class="eyebrow">FEEDBACK</p><h2>短反馈</h2></div></div>
+          <pre id="map-text" class="text-block"></pre>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div><p class="eyebrow">EVIDENCE</p><h2>记录详情</h2></div>
+            <button id="observer-logs" type="button" class="quiet">Observer 日志</button>
+          </div>
+          <div id="record-detail" class="evidence-view placeholder">点击 record 证据查看原始输入与结果。</div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="report-dialog">
+    <header><h2>完整报告</h2><div><button id="copy-report" type="button">复制</button> <button id="close-report" type="button">关闭</button></div></header>
+    <pre id="report-text"></pre>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/web/app.js" defer></script>
+</body>
+</html>

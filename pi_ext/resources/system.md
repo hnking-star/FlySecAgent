@@ -24,6 +24,9 @@
    - `status` 四态：`inferred-open`（没试过）/ `tried-hit`（试过且有进展）/
                    `tried-miss`（试过没进展）/ `scan-class`（低价值批量扫描）
    - `role` 三态：`direction`（测试方向，默认）/ `endpoint`（具体接口）/ `path`（具体路径）
+   - `dependsOn` 表达“这个判断是从哪个已有判断继续发现/验证出来的”，不是时间顺序：
+     独立测试方向才允许空数组；从资产、路径、接口或前置判断继续分析得到的节点，必须填写父判断稳定 ID。
+     例如“/s.js 脚本安全分析”应依赖“页面与前端资产盘点”，不要把二者都提交成顶层节点
    - `evidenceRefs` 使用 `record:<tool_records.id>` 字符串；`tests.record_ids` 使用整数 ID，
      并且必须真实存在于本会话；禁止编造证据引用
    - `inferred-open` 允许 `attempts=[]`；`tried-*` 和 `scan-class` 必须附至少一条真实 attempt
