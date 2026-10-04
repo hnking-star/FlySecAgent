@@ -1,98 +1,52 @@
-"""Render a complete, human-readable Markdown report from one blackboard snapshot."""
-
+"""Human report: observations, executed tests, scope and unanswered questions."""
 from __future__ import annotations
 
-from collections import Counter
+from .blackboard import active_facts, prepare_state
+
+KINDS = {"observation": "观察记录（附证据）", "hypothesis": "解释/假设（未独立验证）", "legacy_summary": "历史摘要（未重新核验）"}
+EXECUTION = {"completed": "已执行", "error": "执行报错", "denied": "本地调用被拒", "interrupted": "执行被中断", "unknown": "执行状态未确认"}
+OUTCOMES = {"supports": "支持本次假设", "contradicts": "不支持本次假设", "inconclusive": "结果不可判定", "not_evaluated": "未评价目标"}
+
+
+def refs(ids):
+    return ", ".join(f"record:{i}" for i in ids) or "历史项未提供证据引用"
 
 
 def render_report(project: dict, observation: dict | None, state: dict | None) -> str:
     if observation is None or state is None:
-        return "# FlySecAgent 观察报告\n\n尚未生成黑板。\n"
-
-    assessments = state.get("assessments", [])
-    apis = state.get("apis", [])
-    apis_by_id = {api.get("id"): api for api in apis}
-    assessments_by_api: dict[str, list[dict]] = {}
-    for assessment in assessments:
-        for api_id in assessment.get("apiIds", []):
-            assessments_by_api.setdefault(api_id, []).append(assessment)
-    guidance = state.get("guidance", {}) or {}
-    statuses = Counter(item.get("status", "unknown") for item in assessments)
-    untested = [api for api in apis if not api.get("tests")]
-
-    lines = [
-        "# FlySecAgent 观察报告",
-        "",
-        f"- 会话：{project['session_id']}",
-        f"- 目标：{project['target']}",
-        f"- 目的：{project['objective']}",
-        f"- 版本：{state.get('revision') or observation['id']}",
-        f"- 证据位置：record:{observation['end_record_id']}",
-        "",
-        "## 探索概览",
-        "",
-        f"- 判断：{len(assessments)}（" + ", ".join(f"{k} {v}" for k, v in sorted(statuses.items())) + "）",
-        f"- API：{len(apis)}，其中 {len(untested)} 条尚无测试记录",
-    ]
-    confirmed = set(guidance.get("confirmedIds", []))
-    angles = set(guidance.get("angleIds", []))
-
-    lines.extend(["", "## 已确认判断", ""])
-    selected = [a for a in assessments if a.get("id") in confirmed] or assessments
-    if not selected:
-        lines.append("（无）")
-    for item in selected:
-        lines.extend(_assessment_lines(item, apis_by_id))
-
-    lines.extend(["", "## 待验证方向", ""])
-    pending = [a for a in assessments if a.get("id") in angles]
-    if not pending:
-        lines.append("（无）")
-    for item in pending:
-        lines.append(f"- [{item.get('id')}] {item.get('subject')}：{item.get('conclusion')}")
-
-    lines.extend(["", "## API 台账", ""])
-    if not apis:
-        lines.append("（无）")
-    for api in apis:
-        lines.extend([f"### {api.get('endpoint')} · {api.get('purpose')}", ""])
-        params = api.get("parameters", [])
-        lines.append("- 参数：" + (", ".join(p.get("name", "?") for p in params) if params else "无已知参数"))
-        related = assessments_by_api.get(api.get("id"), [])
-        lines.append("- 关联判断：" + (", ".join(f"{item.get('subject')}（{item.get('id')}）" for item in related) if related else "无"))
-        tests = api.get("tests", [])
-        if not tests:
-            lines.append("- 测试：尚无测试记录")
-        for test in tests:
-            refs = ", ".join(f"record:{rid}" for rid in test.get("record_ids", []))
-            lines.append(f"- [{test.get('id')}] {test.get('action')} → {test.get('result')}（{refs}）")
-        lines.append("")
-
-    tension = guidance.get("tension", [])
-    if tension:
-        lines.extend(["## 冲突或待对账", "", *(f"- {value}" for value in tension), ""])
-
-    retired = state.get("retired", [])
-    if retired:
-        lines.extend(["## 已存档判断", ""])
-        lines.extend(f"- [{item.get('id')}] {item.get('subject')}：{item.get('conclusion')}" for item in retired)
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _assessment_lines(item: dict, apis_by_id: dict[str, dict]) -> list[str]:
-    related = [apis_by_id[api_id] for api_id in item.get("apiIds", []) if api_id in apis_by_id]
-    lines = [
-        f"### {item.get('subject')}（{item.get('id')}）",
-        "",
-        f"- 状态：{item.get('status')}",
-        f"- 结论：{item.get('conclusion')}",
-        f"- 依据：{item.get('basis')}",
-        f"- 不确定性：{item.get('uncertainty') or '无'}",
-        "- 关联 API：" + (", ".join(api.get("endpoint", api.get("id", "?")) for api in related) if related else "无"),
-        "- 证据：" + ", ".join(item.get("evidenceRefs", [])),
-    ]
-    for attempt in item.get("attempts", []):
-        lines.append(f"- 尝试 [{attempt.get('id')}]：{attempt.get('action')} → {attempt.get('result')}")
-    lines.append("")
-    return lines
+        return "# FlySecAgent 证据记忆报告\n\n尚未生成黑板。\n"
+    state = prepare_state(state, project["target"])
+    topics = {t["id"]: t for t in state["topics"]}
+    tests = state["tests"]
+    lines = ["# FlySecAgent 证据记忆报告", "", "## 目标与记录范围", "",
+             f"- 会话：{project['session_id']}", f"- 目标：{project['target']}", f"- 目的：{project['objective']}",
+             f"- 快照版本：{state.get('revision') or observation['id']}", f"- 快照截至：record:{observation['end_record_id']}",
+             "- 本报告整理已有工具证据，不独立复测；观察与解释分开，不推断未记录的测试已完成。",
+             "", "## 观察与解释", ""]
+    for topic in state["topics"]:
+        lines.extend([f"### {topic['title']}", "", topic.get("summary", ""), ""])
+        for fact in [f for f in active_facts(state) if f["topic_id"] == topic["id"]]:
+            lines.extend([f"- [{fact['id']}] {KINDS.get(fact['kind'], fact['kind'])}：{fact['statement']}",
+                          f"  - 条件与边界：{fact.get('scope') or '仅限所引证据，未补充未知条件'}", f"  - 证据：{refs(fact.get('evidence_ids', []))}"])
+    lines.extend(["", "## 已执行测试与执行问题", ""])
+    for test in tests:
+        lines.extend([f"### {test['id']} · {topics.get(test['topic_id'], {}).get('title', test['topic_id'])}",
+                      f"- 动作：{test['action']}", f"- 返回：{test['result']}",
+                      f"- 执行状态：{EXECUTION.get(test['execution'], test['execution'])}", f"- 本次结果：{OUTCOMES.get(test['outcome'], test['outcome'])}",
+                      f"- 条件与边界：{test.get('scope') or '仅限所引证据条件'}", f"- 证据：{refs(test.get('evidence_ids', []))}", ""])
+    lines.extend(["## API 与测试记录", ""])
+    for api in state["apis"]:
+        related = [t for t in tests if api["id"] in t.get("api_ids", [])]
+        lines.extend([f"### {api['endpoint']} · {api['purpose']}",
+                      "- 参数：" + (", ".join(p['name'] for p in api.get('parameters', [])) or "无已知参数"),
+                      "- 关联主题：" + (", ".join(t['title'] for t in state['topics'] if api['id'] in t.get('api_ids', [])) or "无"),
+                      f"- 已完成尝试：{sum(t['execution'] == 'completed' for t in related)}；已有记录：{len(related)}。记录数量不代表全面覆盖。",
+                      *[f"- 测试 [{t['id']}]：{t['action']} → {t['result']}（{refs(t['evidence_ids'])}）" for t in related], ""])
+    lines.extend(["## 未完成与未确认事项", ""])
+    pending = [q for q in state["questions"] if q["status"] == "open"]
+    lines.extend([f"- [{q['id']}] {q['question']}（{refs(q.get('evidence_ids', []))}）" for q in pending] or ["无已记录的未确认问题；这不证明所有测试已完成。"])
+    lines.extend(["", "## 观察修正历史", ""])
+    corrections = [f for f in state["facts"] if f.get("supersedes")]
+    lines.extend([f"- {f['id']} 修正 {f['supersedes']}：{f['statement']}" for f in corrections] or ["无观察修正记录。"])
+    lines.extend(["", "## 结果验收边界", "", "读取某个结果与靶场/平台验收是两个事件；没有平台回执时不得宣称已提交或已验收。", ""])
+    return "\n".join(lines)

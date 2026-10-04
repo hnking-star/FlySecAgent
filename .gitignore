@@ -17,8 +17,14 @@ pi_ext/dist/
 # macOS
 .DS_Store
 
-docs/
+# Development specifications are tracked; runtime evidence remains private.
 
 # Local Coco installation (absolute machine paths)
 .trae/hooks.json
 .trae/hooks.json.flysec-backup-*
+
+# Local TraeCode CLI installation (absolute machine paths)
+.trae/cli/hooks.json
+.trae/cli/hooks.json.flysec-backup-*
+
+docs/

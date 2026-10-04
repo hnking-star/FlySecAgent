@@ -48,7 +48,7 @@ async def validation_exception_handler(
     path = "/" + "/".join(str(x) for x in first.get("loc", []) if x != "body")
     message = first.get("msg", "schema invalid")
     body = error_body("schema_invalid", message, path=path or "/")
-    if _request.url.path == "/observer/submit":
+    if _request.url.path == "/memory/commit":
         body["errors"] = [{"code": "schema_invalid", "path": path, "message": message}]
         sid = getattr(_request.state, "session_id", None)
         if sid:
@@ -58,7 +58,7 @@ async def validation_exception_handler(
             try:
                 row = conn.execute("SELECT id FROM observations WHERE session_id=? AND status='running' ORDER BY id DESC LIMIT 1", (sid,)).fetchone()
                 if row:
-                    entry = {"op": "observation_submit", "arguments": exc.body, "ok": False, "errors": body["errors"], "response": body}
+                    entry = {"op": "curator_commit", "arguments": exc.body, "ok": False, "errors": body["errors"], "response": body}
                     conn.execute("UPDATE observations SET tool_logs_json=json_insert(tool_logs_json,'$[#]',json(?)) WHERE id=?", (json.dumps(entry, ensure_ascii=False), row["id"]))
             finally:
                 conn.close()

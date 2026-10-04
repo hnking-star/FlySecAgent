@@ -114,6 +114,8 @@ async def test_project_management_shell_has_accessible_controls(client):
     for element_id in (
         "projects-view", "project-detail-view", "project-search", "project-status",
         "project-sort", "project-list", "back-to-projects", "recent-projects",
+        "graph-panel", "graph-fullscreen", "graph-fit", "graph-zoom-out",
+        "graph-zoom-reset", "graph-zoom-in",
     ):
         matches = [(tag, attrs) for tag, attrs in parser.elements if attrs.get("id") == element_id]
         assert len(matches) == 1, f"expected one element with id={element_id}"
@@ -128,6 +130,9 @@ async def test_project_management_shell_has_accessible_controls(client):
         assert None not in parser.options[element_id]
     assert {"all", "enabled", "paused", "closed", "unpublished"} <= set(parser.options["project-status"])
     assert {"recent", "oldest", "target"} <= set(parser.options["project-sort"])
+    assert controls["graph-fullscreen"][0] == "button"
+    assert controls["graph-fullscreen"][1]["aria-controls"] == "graph-panel"
+    assert controls["graph-fullscreen"][1]["aria-pressed"] == "false"
 
 
 @pytest.mark.asyncio
@@ -206,9 +211,9 @@ async def test_published_project_record_logs_and_report(client):
     assert logs.json()["logs"][0]["op"] == "observation_context"
     report = await c.get("/web/report/web-a")
     assert report.headers["content-type"].startswith("text/markdown")
-    assert "GET /api/demo" in report.text
-    assert "关联 API：GET /api/demo" in report.text
-    assert "关联判断：" in report.text
+    assert "GET https://example.com/api/demo" in report.text
+    assert "已完成尝试：0；已有记录：2" in report.text
+    assert "关联主题：" in report.text
     assert "record:1" in report.text
 
 
@@ -244,7 +249,9 @@ def test_frontend_never_uses_inner_html_for_data():
     assert "innerHTML" not in source
     assert "textContent" in source
     assert "renderRelatedApis" in source
-    assert "assessment.apiIds" in source
+    assert "topic.api_ids" in source
+    assert "memory_digest" in source
+    assert "current?.view?.apis" in source
     assert '"api-summary"' in source
     assert 'setAttribute("aria-expanded"' in source
     assert "expandedApiId" in source

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -41,6 +42,11 @@ def init_db(data_dir: Path) -> None:
     conn = connect(data_dir)
     try:
         conn.executescript(sql)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(projects)")}
+        if "agent_activity_known" not in columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN agent_activity_known INTEGER NOT NULL DEFAULT 0")
+        if "final_summary_requested" not in columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN final_summary_requested INTEGER NOT NULL DEFAULT 0")
     finally:
         conn.close()
 
@@ -51,10 +57,16 @@ def transaction(conn: sqlite3.Connection):
 
     连接必须是 isolation_level=None 的 autocommit 模式。
     """
-    conn.execute("BEGIN IMMEDIATE;")
+    nested = conn.in_transaction
+    savepoint = "sp_" + uuid.uuid4().hex
+    conn.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE;")
     try:
         yield
-        conn.execute("COMMIT;")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint}" if nested else "COMMIT;")
     except Exception:
-        conn.execute("ROLLBACK;")
+        if nested:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        else:
+            conn.execute("ROLLBACK;")
         raise

@@ -286,7 +286,7 @@ def _publish_fake_observation(
     make_current: bool = True,
 ) -> int:
     """塞一行 published observation；可选把 projects.current_observation_id 指过去。"""
-    state_json = json.dumps({"revision": revision, "assessments": [], "apis": []})
+    state_json = json.dumps({"schema_version":2,"revision":revision,"topics":[],"facts":[],"tests":[],"apis":[],"questions":[]})
     conn = db.connect(cfg.data_dir)
     try:
         with db.transaction(conn):

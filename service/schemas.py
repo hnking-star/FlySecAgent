@@ -1,14 +1,10 @@
-"""Pydantic 入参/出参模型。
-
-- Task 4：/hook/*
-- Task 5：/observer/* 及其子结构（Attempt / Assessment / ApiEntry / Guidance）
-"""
+"""Single source of truth: host transport DTOs and FlySec evidence-memory v2."""
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from typing_extensions import Annotated
 
 # ---------------------------------------------------------------------------
@@ -22,7 +18,6 @@ ObjectiveStr = Annotated[str, StringConstraints(min_length=1, max_length=2000)]
 IdStr = Annotated[
     str, StringConstraints(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{0,79}$")
 ]
-EvidenceRef = Annotated[str, StringConstraints(pattern=r"^record:[1-9][0-9]*$")]
 EndpointStr = Annotated[
     str,
     StringConstraints(
@@ -33,10 +28,7 @@ EndpointStr = Annotated[
 Action1200 = Annotated[str, StringConstraints(min_length=1, max_length=1200)]
 Result4000 = Annotated[str, StringConstraints(min_length=1, max_length=4000)]
 Subject120 = Annotated[str, StringConstraints(min_length=1, max_length=120)]
-Conclusion600 = Annotated[str, StringConstraints(min_length=1, max_length=600)]
-Basis1200 = Annotated[str, StringConstraints(min_length=1, max_length=1200)]
 Purpose400 = Annotated[str, StringConstraints(min_length=1, max_length=400)]
-Line400 = Annotated[str, StringConstraints(min_length=1, max_length=400)]
 ParamName = Annotated[str, StringConstraints(min_length=1, max_length=80)]
 
 
@@ -90,97 +82,102 @@ class MapAckOutput(BaseModel):
     acked: bool = True
 
 
-# ---------------------------------------------------------------------------
-# /observer/context （Task 5）
-# ---------------------------------------------------------------------------
+# Memory protocol v2. Transport identity is never a model argument.
+
+class MemoryModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-class ContextInput(BaseModel):
-    mode: Literal[
-        "summary", "window_records", "record_detail", "blackboard", "history_record"
-    ] = "summary"
-    record_id: int | None = None
-    offset: int = Field(0, ge=0)
-    length: int = Field(8192, ge=1, le=65536)
-    assessment_ids: list[IdStr] = Field(default_factory=list, max_length=16)
+class Topic(MemoryModel):
+    id: IdStr
+    title: Subject120
+    summary: str = Field("", max_length=600)
+    api_ids: list[IdStr] = Field(default_factory=list, max_length=512)
+    origin_fact_ids: list[IdStr] = Field(default_factory=list, max_length=16)
+
+
+class Fact(MemoryModel):
+    id: IdStr
+    topic_id: IdStr
+    statement: str = Field(min_length=1, max_length=1200)
+    kind: Literal["observation", "hypothesis"] = "observation"
+    scope: str | None = Field(None, max_length=600)
+    evidence_ids: list[int] = Field(min_length=1, max_length=16)
+    supersedes: IdStr | None = None
+
+
+class TestRecord(MemoryModel):
+    id: IdStr
+    topic_id: IdStr
+    api_ids: list[IdStr] = Field(default_factory=list, max_length=32)
+    action: Action1200
+    result: Result4000
+    execution: Literal["completed", "error", "denied", "interrupted", "unknown"]
+    outcome: Literal["supports", "contradicts", "inconclusive", "not_evaluated"]
+    scope: str | None = Field(None, max_length=600)
+    evidence_ids: list[int] = Field(min_length=1, max_length=16)
 
     @model_validator(mode="after")
-    def _check_record_id(self):
-        if self.mode in ("record_detail", "history_record") and self.record_id is None:
-            raise ValueError("record_id required for this mode")
+    def consistent_outcome(self):
+        if self.execution != "completed" and self.outcome != "not_evaluated":
+            raise ValueError("an incomplete/failed execution cannot evaluate the target hypothesis")
         return self
 
 
-# ---------------------------------------------------------------------------
-# /observer/submit （Task 5）
-# ---------------------------------------------------------------------------
-
-
-class Attempt(BaseModel):
-    id: IdStr
-    action: Action1200
-    result: Result4000
-    assessment: str | None = Field(None, max_length=1200)
-    evidenceRefs: list[EvidenceRef] = Field(min_length=1, max_length=16)
-
-
-class Assessment(BaseModel):
-    id: IdStr
-    subject: Subject120
-    status: Literal["inferred-open", "tried-hit", "tried-miss", "scan-class"]
-    role: Literal["direction", "endpoint", "path"] = "direction"
-    conclusion: Conclusion600
-    basis: Basis1200
-    uncertainty: str | None = Field(..., max_length=1200)
-    evidenceRefs: list[EvidenceRef] = Field(min_length=1, max_length=16)
-    attempts: list[Attempt] = Field(default_factory=list, max_length=20)
-    dependsOn: list[IdStr] = Field(default_factory=list, max_length=16)
-    apiIds: list[IdStr] = Field(default_factory=list, max_length=32)
-
-    @model_validator(mode="after")
-    def _check_attempts(self):
-        if self.status != "inferred-open" and not self.attempts:
-            raise ValueError(f"status={self.status} requires at least one attempt")
-        return self
-
-
-class ApiTest(BaseModel):
-    id: IdStr
-    action: Action1200
-    result: Result4000
-    record_ids: list[int] = Field(min_length=1, max_length=16)
-
-
-class ApiParam(BaseModel):
+class ApiParam(MemoryModel):
     name: ParamName
     description: str | None = Field(None, max_length=400)
 
 
-class ApiEntry(BaseModel):
+class ApiEntry(MemoryModel):
     id: IdStr
     endpoint: EndpointStr
     purpose: Purpose400
     parameters: list[ApiParam] = Field(default_factory=list, max_length=32)
-    tests: list[ApiTest] = Field(default_factory=list, max_length=32)
+    evidence_ids: list[int] = Field(min_length=1, max_length=16)
 
 
-class Guidance(BaseModel):
-    hypothesis: str | None = Field(None, max_length=400)
-    lock: str | None = Field(None, max_length=400)
-    angleIds: list[IdStr] = Field(default_factory=list, max_length=4)
-    confirmedIds: list[IdStr] = Field(default_factory=list, max_length=8)
-    tension: list[Line400] = Field(default_factory=list, max_length=2)
+class OpenQuestion(MemoryModel):
+    id: IdStr
+    topic_id: IdStr
+    question: str = Field(min_length=1, max_length=600)
+    api_ids: list[IdStr] = Field(default_factory=list, max_length=32)
+    evidence_ids: list[int] = Field(min_length=1, max_length=16)
+    status: Literal["open", "resolved"] = "open"
+    resolution: str | None = Field(None, max_length=600)
 
     @model_validator(mode="after")
-    def _check_tension(self):
-        if len(self.tension) not in (0, 2):
-            raise ValueError("tension must have 0 or 2 items")
+    def resolution_required(self):
+        if self.status == "resolved" and not self.resolution:
+            raise ValueError("resolved questions need a concrete resolution and evidence")
         return self
 
 
-class SubmitInput(BaseModel):
-    baseRevision: str | None
-    upserts: list[Assessment] = Field(default_factory=list, max_length=30)
-    retireIds: list[IdStr] = Field(default_factory=list, max_length=32)
-    apis: list[ApiEntry] = Field(default_factory=list, max_length=32)
-    guidance: Guidance | None = None
+class MemoryReadInput(MemoryModel):
+    mode: Literal["summary", "records", "record", "state"] = "summary"
+    record_id: int | None = Field(None, ge=1)
+    offset: int = Field(0, ge=0)
+    length: int = Field(8192, ge=1, le=65536)
+    after_id: int = Field(0, ge=0)
+    limit: int = Field(50, ge=1, le=100)
+    topic_ids: list[IdStr] = Field(default_factory=list, max_length=16)
+
+    @model_validator(mode="after")
+    def record_required(self):
+        if self.mode == "record" and self.record_id is None:
+            raise ValueError("record_id is required for record mode")
+        return self
+
+
+class MemoryCommitInput(MemoryModel):
+    protocol: Literal[2] = 2
+    revision: str | None
+    unchanged_reason: str | None = Field(None, min_length=1, max_length=400)
+    # Flat append-only records must not inherit v1's small *topic* limits:
+    # v1 could hold many nested attempts per topic. Bound request size without
+    # forcing ordinary large-JS windows to omit their APIs or test records.
+    topics: list[Topic] = Field(default_factory=list, max_length=256)
+    facts: list[Fact] = Field(default_factory=list, max_length=1024)
+    tests: list[TestRecord] = Field(default_factory=list, max_length=1024)
+    apis: list[ApiEntry] = Field(default_factory=list, max_length=512)
+    questions: list[OpenQuestion] = Field(default_factory=list, max_length=256)

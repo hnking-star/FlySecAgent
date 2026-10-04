@@ -3,12 +3,12 @@
 Task 7 用真的 Node/TS 版本替换 PiRunner 的启动命令，本模块就不再被调用。
 
 协议：
-  stdin  (服务→Pi): {"op":"run_observation","trigger":"..."}  / {"op":"shutdown"}
+  stdin  (服务→Pi): {"op":"run_curation","trigger":"..."}  / {"op":"shutdown"}
   stdout (Pi→服务): {"op":"ready"} / {"op":"run_started","trigger":...}
                     {"op":"run_done","ok":bool,"revision":..?,"errors":..?}
 
-本 stub 收到 run_observation：
-  1. 调 /observer/context (mode=summary) 读 revision
+本 stub 收到 run_curation：
+  1. 调 /memory/read (mode=summary) 读 revision
   2. 发空 submit → unchanged
   3. 回报 run_done
 """
@@ -44,16 +44,16 @@ def _recv() -> dict | None:
 def _run_one(client: httpx.Client, token: str, trigger: str) -> dict:
     headers = {"X-FlySec-Token": token}
     ctx = client.post(
-        "/observer/context", headers=headers, json={"mode": "summary"}
+        "/memory/read", headers=headers, json={"mode": "summary"}
     )
     if ctx.status_code != 200:
         return {"ok": False, "errors": [{"path": "/", "code": "context_failed",
                                           "message": ctx.text}]}
-    base = ctx.json().get("blackboard", {}).get("revision")
+    base = ctx.json().get("memory", {}).get("revision")
     r = client.post(
-        "/observer/submit",
+        "/memory/commit",
         headers=headers,
-        json={"baseRevision": base},
+        json={"revision": base, "unchanged_reason": "Test stub validates transport only; no model-generated domain memory"},
     )
     body = r.json() if r.content else {}
     return body
@@ -76,7 +76,7 @@ def main() -> int:
             op = msg.get("op")
             if op == "shutdown":
                 return 0
-            if op != "run_observation":
+            if op not in {"run_curation", "run_observation"}:
                 continue
 
             trigger = msg.get("trigger", "unknown")
@@ -95,7 +95,7 @@ def main() -> int:
                 "ok": bool(result.get("ok")),
                 "revision": result.get("revision"),
                 "errors": result.get("errors"),
-                "unchanged": result.get("unchanged"),
+                "unchanged": not result.get("published", False),
             })
 
 

@@ -41,7 +41,7 @@ async def test_coco_direct_chat_activation_uses_runtime_session_id(live_service)
     result = await _run_hook("coco", env_for(svc), event)
     assert result.returncode == 0
     output = json.loads(result.stdout)
-    assert "观察已开启" in output["hookSpecificOutput"]["additionalContext"]
+    assert "证据记忆已开启" in output["hookSpecificOutput"]["additionalContext"]
     conn = sqlite3.connect(svc.data_dir / "flysec.db")
     try:
         row = conn.execute(
@@ -113,7 +113,7 @@ async def test_coco_offline_replay_is_lossless_and_bounded(live_service):
 
 
 @pytest.mark.asyncio
-async def test_observer_utf8_and_window_isolation(client):
+async def test_curator_utf8_and_window_isolation(client):
     c, app = client
     headers = {"X-FlySec-Token": app.state.service_token}
     for sid in ["A", "B"]:
@@ -126,10 +126,10 @@ async def test_observer_utf8_and_window_isolation(client):
         observation.start_observation(conn, "A", "timer_5min")
     finally:
         conn.close()
-    observer_headers = {"X-FlySec-Token": app.state.token_registry.issue("A")}
+    curator_headers = {"X-FlySec-Token": app.state.token_registry.issue("A")}
     chunks, offset = [], 0
     while True:
-        response = await c.post("/observer/context", headers=observer_headers, json={"mode": "record_detail", "record_id": record_id, "offset": offset, "length": 511})
+        response = await c.post("/memory/read", headers=curator_headers, json={"mode": "record", "record_id": record_id, "offset": offset, "length": 511})
         assert response.status_code == 200
         segment = response.json()["segment"]
         chunks.append(segment["data"])
@@ -139,7 +139,7 @@ async def test_observer_utf8_and_window_isolation(client):
     decoded = json.loads("".join(chunks).split("\n---\n", 1)[1])
     assert decoded == original
     other_headers = {"X-FlySec-Token": app.state.token_registry.issue("B")}
-    cross = await c.post("/observer/context", headers=other_headers, json={"mode": "history_record", "record_id": record_id})
+    cross = await c.post("/memory/read", headers=other_headers, json={"mode": "record", "record_id": record_id})
     assert cross.status_code == 404
 
 
@@ -173,7 +173,8 @@ async def test_coco_concurrent_offline_hooks_keep_every_record(live_service):
     assert all(result.returncode == 0 for result in results)
     queue = svc.data_dir / "queue/pending.jsonl"
     payloads = [json.loads(line)["payload"] for line in queue.read_text().splitlines()]
-    assert {p["call_key"] for p in payloads} == {f"parallel-{i}" for i in range(12)}
+    payloads += [json.loads(p.read_text())["payload"] for p in (svc.data_dir / "queue/spool").glob("*.json")]
+    assert {p["call_key"] for p in payloads} == {f"parallel-{i}" for i in range(12)}, [r.stderr for r in results]
     for _ in range(3):
         await _run_hook("coco", env_for(svc), {"hook_event_name": "SessionStart", "session_id": "parallel"})
     assert queue.read_text() == ""
@@ -182,3 +183,57 @@ async def test_coco_concurrent_offline_hooks_keep_every_record(live_service):
         assert conn.execute("SELECT COUNT(*) FROM tool_records WHERE session_id='parallel'").fetchone()[0] == 12
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_camel_events_interrupt_and_late_tool_do_not_restart_finished_turn(live_service):
+    svc = live_service; sid = 'camel-interrupt'; env = env_for(svc)
+    await _run_hook('coco', env, {'hook_event_name':'userPromptSubmit', 'session_id':sid, 'prompt':'开始进行测试 https://fixture.test'})
+    await _run_hook('coco', env, {'hook_event_name':'interrupt', 'session_id':sid})
+    await _run_hook('coco', env, {'hook_event_name':'postToolUse', 'session_id':sid, 'tool_use_id':'late', 'tool_name':'Read', 'tool_input':{}, 'tool_response':{'stdout':'late local receipt'}})
+    conn = sqlite3.connect(svc.data_dir / 'flysec.db')
+    try:
+        assert conn.execute('SELECT agent_turn_active,agent_activity_known FROM projects WHERE session_id=?', (sid,)).fetchone()==(0,1)
+        assert conn.execute('SELECT count(*) FROM tool_records WHERE session_id=?', (sid,)).fetchone()[0]==1
+    finally: conn.close()
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_preserves_actual_partial_response(live_service):
+    from service.evidence import execution_status
+    svc = live_service; sid = 'partial-error'; await _ensure_project(svc,sid)
+    original = {'stdout':'partial local output 中文🙂', 'stderr':'diagnostic detail'}
+    await _run_hook('coco',env_for(svc),{'hook_event_name':'PostToolUseFailure','session_id':sid,'tool_use_id':'partial','tool_name':'Read','tool_input':{'path':'local-fixture'},'tool_response':original,'error':'The tool failed after producing partial output'})
+    conn = sqlite3.connect(svc.data_dir / 'flysec.db')
+    try:
+        response,metadata = conn.execute('SELECT tool_response_json,metadata_json FROM tool_records WHERE session_id=?',(sid,)).fetchone()
+        assert json.loads(response)==original
+        assert json.loads(metadata)['error']=='The tool failed after producing partial output'
+        assert execution_status(json.loads(response),json.loads(metadata))=='error'
+    finally:conn.close()
+
+
+@pytest.mark.asyncio
+async def test_busy_queue_lock_has_durable_fallback_and_replays(live_service, monkeypatch):
+    import contextlib
+    import hook.common as common
+    svc = live_service; sid = 'busy-queue'; await _ensure_project(svc,sid)
+    cfg = common.HookConfig(svc.api_base,svc.data_dir,svc.token)
+    original_lock = common._queue_lock
+    @contextlib.contextmanager
+    def busy_lock(*args, **kwargs):
+        raise TimeoutError('controlled append lock contention')
+        yield
+    monkeypatch.setattr(common,'_queue_lock',busy_lock)
+    payload = {'session_id':sid, 'call_key':'busy-1', 'tool_name':'Read', 'tool_input':{}, 'tool_response':'中文🙂'*1000, 'metadata':{}}
+    common.enqueue_ingest(cfg,payload)
+    files = list((svc.data_dir/'queue/spool').glob('*.json'))
+    assert len(files)==1 and json.loads(files[0].read_text())['payload']==payload
+    assert files[0].stat().st_mode & 0o777 == 0o600
+    monkeypatch.setattr(common,'_queue_lock',original_lock)
+    delivered = await asyncio.to_thread(common.flush_queue,cfg)
+    assert delivered==1 and not files[0].exists()
+    conn=sqlite3.connect(svc.data_dir/'flysec.db')
+    try:
+        assert json.loads(conn.execute('SELECT tool_response_json FROM tool_records WHERE session_id=?',(sid,)).fetchone()[0])==payload['tool_response']
+    finally:conn.close()

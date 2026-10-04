@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0c1017">
-  <title>FlySecAgent · Observer 工作台</title>
+  <meta name="theme-color" content="#f3f5f9">
+  <title>FlySecAgent · 证据记忆工作台</title>
   <link rel="stylesheet" href="/web/styles.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
     <aside class="sidebar" aria-label="工作台导航">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7.5 12 3l8 4.5L12 12 4 7.5Z"/><path d="m4 12 8 4.5 8-4.5M4 16.5l8 4.5 8-4.5"/></svg></div>
-        <div><strong>FlySecAgent</strong><span>Observer 工作台</span></div>
+        <div><strong>FlySecAgent</strong><span>证据记忆工作台</span></div>
       </div>
       <nav class="sidebar-nav" aria-label="主导航">
         <button id="nav-projects" class="nav-item active" type="button" aria-current="page"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2.5 5.5a1 1 0 0 1 1-1H8l2 2h6.5a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-10Z"/></svg><span>项目管理</span><span id="sidebar-project-count" class="nav-count">—</span></button>
@@ -36,7 +36,7 @@
           <div class="project-list-toolbar">
             <div class="search-field"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><label class="sr-only" for="project-search">搜索项目</label><input id="project-search" type="search" placeholder="搜索名称、目标或会话 ID…" autocomplete="off"></div>
             <div class="list-filters">
-              <label class="select-label" for="project-status">状态<select id="project-status"><option value="all">全部状态</option><option value="enabled">观察开启</option><option value="paused">Observer 暂停</option><option value="closed">观察关闭</option><option value="unpublished">尚未发布</option></select></label>
+              <label class="select-label" for="project-status">状态<select id="project-status"><option value="all">全部状态</option><option value="enabled">观察开启</option><option value="paused">记忆整理器暂停</option><option value="closed">观察关闭</option><option value="unpublished">尚未发布</option></select></label>
               <label class="select-label" for="project-sort">排序<select id="project-sort"><option value="recent">最近创建</option><option value="oldest">最早创建</option><option value="target">按目标排序</option></select></label>
             </div>
           </div>
@@ -52,7 +52,7 @@
       <section id="project-detail-view" class="page-section hidden" aria-label="项目详情">
         <div class="detail-page-heading"><button id="back-to-projects" class="quiet back-button" type="button">← 返回项目列表</button><div id="detail-toolbar" class="detail-toolbar hidden"><label class="select-label" for="project-select">项目<select id="project-select"></select></label><label class="select-label" for="version-select">版本<select id="version-select"></select></label><button id="report" class="primary" type="button">查看报告 ↗</button></div></div>
         <div id="overview" class="overview"></div>
-        <section id="empty" class="empty hidden"><span class="empty-icon" aria-hidden="true">◇</span><h2 id="empty-title">尚未生成黑板</h2><p id="empty-message">项目已经存在，但 Observer 还没有发布有效快照。</p></section>
+        <section id="empty" class="empty hidden"><span class="empty-icon" aria-hidden="true">◇</span><h2 id="empty-title">尚未生成黑板</h2><p id="empty-message">项目已经存在，但 记忆整理器还没有发布有效快照。</p></section>
         <section id="content" class="hidden">
           <div class="detail-tabs" role="tablist" aria-label="黑板内容">
             <button id="workspace-tab-graph" class="detail-tab active" role="tab" type="button" data-tab="graph" aria-selected="true" aria-controls="tab-graph">探索图</button>
@@ -61,24 +61,28 @@
           </div>
           <div id="tab-graph" role="tabpanel" aria-labelledby="workspace-tab-graph">
             <div class="main-grid">
-              <section class="panel graph-panel"><div class="panel-head"><div><h2>探索图</h2><p class="panel-description">按判断依赖查看测试过程</p></div><span id="graph-count" class="metric"></span></div><div id="graph-filters" class="filter-group" aria-label="判断状态筛选"></div><div id="graph" class="graph" aria-label="探索图"></div><p class="graph-note">连线表示判断依赖；测试有进展不等于已确认漏洞。</p></section>
-              <aside class="panel detail-panel"><div class="panel-head"><div><h2>节点详情</h2><p class="panel-description">判断、关联 API 与证据</p></div></div><div id="assessment-detail" class="placeholder">点击图中的节点查看判断、尝试和证据。</div></aside>
+              <section id="graph-panel" class="panel graph-panel">
+                <div class="panel-head"><div><h2>探索图</h2><p class="panel-description">主题、观察与测试记录的关联</p></div><div class="graph-toolbar"><span id="graph-count" class="metric"></span><button id="graph-fullscreen" type="button" aria-label="全屏查看探索图" aria-controls="graph-panel" aria-pressed="false">全屏 ↗</button></div></div>
+                <div class="graph-view-bar"><div id="graph-filters" class="filter-group" aria-label="主题内容筛选"></div><div class="graph-zoom-tools" aria-label="探索图缩放"><button id="graph-fit" type="button">适应全图</button><button id="graph-zoom-out" type="button" aria-label="缩小探索图">−</button><button id="graph-zoom-reset" type="button" aria-label="恢复原始比例">100%</button><button id="graph-zoom-in" type="button" aria-label="放大探索图">+</button></div></div>
+                <div id="graph" class="graph" aria-label="探索图"></div><p class="graph-note">连线依据关联观察，不按时间顺序推断因果；历史摘要未重新核验。全屏后可缩放查看，按 Esc 返回。</p>
+              </section>
+              <aside class="panel detail-panel"><div class="panel-head"><div><h2>主题记忆</h2><p class="panel-description">观察、测试、未确认问题与 API</p></div></div><div id="topic-detail" class="placeholder">点击主题查看观察、测试、未确认问题与证据。</div></aside>
             </div>
           </div>
           <section id="tab-apis" class="panel hidden" role="tabpanel" aria-labelledby="workspace-tab-apis">
             <div class="panel-head"><div><h2>API 台账</h2><p class="panel-description">每个接口一行，展开查看参数与测试历史</p></div><span id="api-count" class="metric"></span></div>
-            <div class="api-toolbar"><label class="sr-only" for="api-search">搜索 API</label><input id="api-search" class="compact-input" type="search" placeholder="搜索端点、用途、参数"><select id="api-filter" class="compact-select" aria-label="API 测试状态"><option value="all">全部接口</option><option value="tested">有测试记录</option><option value="untested">无测试记录</option></select></div>
+            <div class="api-toolbar"><label class="sr-only" for="api-search">搜索 API</label><input id="api-search" class="compact-input" type="search" placeholder="搜索端点、用途、参数"><select id="api-filter" class="compact-select" aria-label="API 测试状态"><option value="all">全部接口</option><option value="tested">有已完成尝试</option><option value="untested">无已完成尝试</option></select></div>
             <div id="api-list" class="api-list"></div><p class="panel-footnote">测试数量仅表示已有记录，不代表接口已全面测试。</p>
           </section>
           <div id="tab-evidence" class="hidden" role="tabpanel" aria-labelledby="workspace-tab-evidence">
             <div class="bottom-grid">
-              <section class="panel evidence-panel"><div class="panel-head"><div><h2>执行证据</h2><p class="panel-description">原始工具输入、返回和 Observer 日志</p></div><button id="observer-logs" type="button" class="quiet">Observer 日志</button></div><div id="record-detail" class="evidence-view placeholder">从节点或 API 测试中点击 record 证据查看详情。</div></section>
-              <section class="panel feedback-panel"><div class="panel-head"><div><h2>短反馈</h2><p class="panel-description">当前版本交付给主 Agent 的摘要</p></div></div><pre id="map-text" class="text-block"></pre></section>
+              <section class="panel evidence-panel"><div class="panel-head"><div><h2>执行证据</h2><p class="panel-description">原始工具输入、返回和 记忆整理器日志</p></div><button id="curator-logs" type="button" class="quiet">记忆整理器日志</button></div><div id="record-detail" class="evidence-view placeholder">从节点或 API 测试中点击 record 证据查看详情。</div></section>
+              <section class="panel feedback-panel"><div class="panel-head"><div><h2>任务记忆摘要</h2><p class="panel-description">供下一轮参考的关键记忆与证据边界</p></div></div><pre id="map-text" class="text-block"></pre></section>
             </div>
           </div>
         </section>
       </section>
-      <footer class="workspace-footer"><span>FlySecAgent · Observer Blackboard</span><span>本机查看 / 历史快照与原始记录分开保存</span></footer>
+      <footer class="workspace-footer"><span>FlySecAgent · Evidence Memory</span><span>本机查看 / 历史快照与原始记录分开保存</span></footer>
     </main>
   </div>
   <dialog id="report-dialog"><header><div><p class="eyebrow">PROJECT REPORT</p><h2>完整报告</h2></div><div><button id="copy-report" type="button">复制</button><button id="close-report" class="quiet" type="button">关闭</button></div></header><pre id="report-text"></pre></dialog>

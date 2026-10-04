@@ -9,10 +9,10 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { ObserverClient } from "./client.js";
+import { CuratorClient } from "./client.js";
 import { runOneRound, type RoundResult } from "./loop.js";
 import { loadSystemPrompt } from "./system-prompt.js";
-import { createObservationTools } from "./tools.js";
+import { createCuratorTools } from "./tools.js";
 import type { RpcIn, RpcOut } from "./types.js";
 
 function send(msg: RpcOut): void {
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
   const baseUrl = (process.env.FLYSEC_PI_BASE_URL || "https://api.deepseek.com/anthropic").trim();
   const agentDir =
     process.env.FLYSEC_PI_AGENT_DIR?.trim() ||
-    join(resolve(process.env.FLYSEC_DATA_DIR || "data"), "pi", createHash("sha256").update(sessionId).digest("hex"), ".pi");
+    join(resolve(process.env.FLYSEC_DATA_DIR || "data"), "pi", "curator-v2", createHash("sha256").update(sessionId).digest("hex"), ".pi");
 
   process.env.PI_OFFLINE = process.env.PI_OFFLINE || "1";
   process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -91,8 +91,8 @@ async function main(): Promise<void> {
     seedModelsDoc(agentDir, provider, modelId, baseUrl);
   }
 
-  const client = new ObserverClient(api, token);
-  const observationTools = createObservationTools(client);
+  const client = new CuratorClient(api, token);
+  const curatorTools = createCuratorTools(client);
   const systemPrompt = loadSystemPrompt();
 
   const modelRuntime = await ModelRuntime.create({
@@ -124,15 +124,15 @@ async function main(): Promise<void> {
   if (!found) throw new Error(`Configured Pi model unavailable: ${provider}/${modelId}`);
   const { session } = await createAgentSession({
     cwd: workspace, agentDir, modelRuntime, settingsManager, sessionManager, resourceLoader,
-    tools: ["observation_context", "observation_submit"],
-    customTools: observationTools.tools, model: found,
+    tools: ["curator_read", "curator_commit"],
+    customTools: curatorTools.tools, model: found,
   });
   const activeTools = session.getActiveToolNames().sort();
-  if (activeTools.join(",") !== "observation_context,observation_submit") {
-    throw new Error("Unexpected active Observer tools");
+  if (activeTools.join(",") !== "curator_commit,curator_read") {
+    throw new Error("Unexpected active Curator tools");
   }
   // Creating a session must not invoke the model or consume a record window.
-  send({ op: "ready", observer_session_id: session.sessionId, tools: activeTools });
+  send({ op: "ready", curator_session_id: session.sessionId, tools: activeTools });
 
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const queue: RpcIn[] = [];
@@ -181,14 +181,14 @@ async function main(): Promise<void> {
     if (stopping || msg === null || msg.op === "shutdown") {
       break;
     }
-    if (msg.op !== "run_observation") {
+    if (msg.op !== "run_curation" && msg.op !== "run_observation") {
       continue;
     }
     const trigger = msg.trigger ?? "unknown";
     send({ op: "run_started", trigger });
     let result: RoundResult;
     try {
-      result = await runOneRound(session, observationTools, trigger, { shouldStop: () => stopping });
+      result = await runOneRound(session, curatorTools, trigger, { shouldStop: () => stopping });
     } catch (err) {
       result = {
         ok: false,

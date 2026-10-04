@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import hashlib
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -213,20 +214,34 @@ def enqueue_ingest(cfg: HookConfig, payload: dict) -> None:
                 fh.flush()
                 os.fsync(fh.fileno())
     except OSError:
-        _logger.warning("queue write failed; event was not saved")
+        # A busy append lock must not silently lose a tool receipt. Each fallback
+        # gets its own atomic file, so concurrent writers never wait for it.
+        try:
+            spool = cfg.queue_dir / "spool"
+            spool.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = spool / (uuid.uuid4().hex + ".json")
+            tmp = path.with_suffix(".tmp")
+            with tmp.open("x", encoding="utf-8") as fh:
+                os.chmod(tmp, 0o600)
+                json.dump({"ts": _now_iso(), "payload": payload}, fh, ensure_ascii=False)
+                fh.flush(); os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except OSError:
+            _logger.warning("queue and fallback write failed; event was not saved")
 
 
 def flush_queue(cfg: HookConfig, *, max_items: int = 10) -> int:
     """Bound replay time and attempts; keep rejected records for inspection/retry."""
     path = _queue_path(cfg)
-    if not path.exists():
+    spool = cfg.queue_dir / "spool"
+    if not path.exists() and not spool.exists():
         return 0
     delivered = 0
     try:
         # Never wait for another flusher; appends use a different short-lived lock.
         with _queue_lock(cfg, ".flush.lock", wait=0):
             with _queue_lock(cfg, ".write.lock"):
-                lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+                lines = path.read_text(encoding="utf-8").splitlines(keepends=True) if path.exists() else []
             accepted: list[str] = []
             replay_until = min(cfg.deadline - 0.5, time.monotonic() + 0.75)
             for line in lines[:max_items]:
@@ -256,6 +271,21 @@ def flush_queue(cfg: HookConfig, *, max_items: int = 10) -> int:
                         fh.flush()
                         os.fsync(fh.fileno())
                     os.replace(tmp, path)
+            # JSONL remains the normal queue. A fallback is removed only after
+            # a confirmed ingest; a crash before removal is deduplicated by its
+            # original host call_key on replay.
+            for item in sorted(spool.glob("*.json"))[:max_items-delivered]:
+                if time.monotonic() >= replay_until:
+                    break
+                try:
+                    payload = json.loads(item.read_text(encoding="utf-8"))["payload"]
+                except (ValueError, KeyError, TypeError):
+                    break
+                status, _ = http_post(cfg, "/hook/record.ingest", payload,
+                                      timeout=max(0.01, replay_until-time.monotonic()))
+                if not 200 <= status < 300:
+                    break
+                item.unlink(); delivered += 1
     except (OSError, UnicodeError):
         pass  # Another hook owns replay, or data remains on disk for a later try.
     return delivered

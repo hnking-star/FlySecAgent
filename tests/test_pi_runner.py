@@ -1,6 +1,6 @@
 """PiRunner 的子进程启停 + RPC 收发测试。
 
-直接起 service.pi_stub 作为子进程；需要真实的 FlySecAgent 服务回应 /observer/*，
+直接起 service.pi_stub 作为子进程；需要真实的 FlySecAgent 服务回应 /memory/*，
 所以这里起一个最简的 FastAPI 子应用监听随机端口。
 """
 
@@ -45,7 +45,7 @@ async def live_app(tmp_path):
             break
         await asyncio.sleep(0.05)
 
-    # 建一个 project 让 pi_stub 的 /observer/context 不 404
+    # 建一个 project 让 pi_stub 的 /memory/read 不 404
     import httpx
     service_token = app.state.service_token
     async with httpx.AsyncClient() as c:

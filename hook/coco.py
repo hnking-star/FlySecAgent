@@ -18,12 +18,9 @@ from .post_tool_use import _build_payload
 
 
 _START_RE = re.compile(
-    r"(?:请)?开始(?:进行)?(?:授权)?(?:安全|渗透)?测试\s*[:：]?\s*"
-    r"(?P<target>https?://[^\s，。；;]+|"
-    r"(?:[A-Za-z0-9_-]+\.)+[A-Za-z]{2,}(?::\d+)?(?:/[^\s，。；;]*)?|"
-    r"(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:/[^\s，。；;]*)?)"
-    r"(?P<tail>.*)$",
-    re.IGNORECASE,
+    r"^(?:请)?(?:开始(?:进行)?(?:授权)?(?:安全|渗透)?测试\s*[:：]?\s*|开始对\s*)"
+    r"(?P<target>https?://[^\s，。；;]+|(?:[A-Za-z0-9_-]+\.)+[A-Za-z]{2,}(?::\d+)?(?:/[^\s，。；;]*)?)"
+    r"(?P<tail>.*)$", re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -35,7 +32,8 @@ def parse_start_prompt(prompt: object) -> tuple[str, str] | None:
     if not match:
         return None
     target = match.group("target").rstrip(",.;:!?，。；：！？)]】")
-    tail = match.group("tail").strip(" \t,.;:!?，。；：！？")
+    tail = match.group("tail").strip(" \t\n,.;:!?，。；：！？")
+    tail = re.sub(r"^(?:进行)?(?:安全|渗透)?测试\s*[,，。:：]?\s*", "", tail)
     objective = tail[:2000] if tail else "记录授权测试过程，梳理攻击面、API 与测试结果"
     return target, objective
 
@@ -70,7 +68,9 @@ def main() -> int:
     kind = event.get("hook_event_name", event.get("event_type", ""))
     kind = {"session_start": "SessionStart", "user_prompt_submit": "UserPromptSubmit",
             "post_tool_use": "PostToolUse", "post_tool_use_failure": "PostToolUseFailure",
-            "stop": "Stop", "session_end": "SessionEnd"}.get(kind, kind)
+            "stop": "Stop", "session_end": "SessionEnd", "interrupt": "Interrupt",
+            "sessionStart": "SessionStart", "sessionEnd": "SessionEnd", "userPromptSubmit": "UserPromptSubmit",
+            "postToolUse": "PostToolUse", "postToolUseFailure": "PostToolUseFailure"}.get(kind, kind)
     # A launch with explicit target/objective opts in.
     target, objective = os.environ.get("FLYSEC_TARGET"), os.environ.get("FLYSEC_OBJECTIVE")
     if kind == "SessionStart" and target and objective:
@@ -110,16 +110,26 @@ def main() -> int:
             from .common import write_additional_context
             write_additional_context(
                 kind,
-                f"FlySecAgent 观察已开启：target={target}。后续工具调用会按当前 Coco session_id 记录。",
+                f"FlySecAgent 证据记忆已开启：target={target}。工具记录按宿主真实会话隔离。最终回答请分开说明结论、已完成工作、关键证据、限制和未完成事项，不把读取结果等同平台验收。",
             )
         else:
             deliver_pending_map(cfg, kind, sid)
     elif kind in {"PostToolUse", "PostToolUseFailure"}:
+        # A real host tool event can restore liveness after a service restart.
+        try:
+            conn = sqlite3.connect((cfg.data_dir / "flysec.db").as_uri() + "?mode=ro", uri=True, timeout=.1)
+            try: activity = conn.execute("SELECT agent_activity_known FROM projects WHERE session_id=?", (sid,)).fetchone()
+            finally: conn.close()
+            if activity and not activity[0]: http_post(cfg, "/control/agent-turn/begin", {"session_id": sid})
+        except sqlite3.Error:
+            pass  # Older service or unavailable state: never guess liveness from a late receipt.
         payload = _build_payload(event, sid)
         if payload:
-            payload["metadata"].update({"hook_event_name": kind, "agent_id": event.get("agent_id"), "source": "coco"})
+            payload["metadata"].update({"hook_event_name": kind, "agent_id": event.get("agent_id"), "source": "host-hook"})
             if kind == "PostToolUseFailure":
-                payload["tool_response"] = {"error": event.get("error"), "is_error": True}
+                payload["metadata"].update({"is_error": True, "error": event.get("error")})
+                if payload["tool_response"] is None:
+                    payload["tool_response"] = {"error": event.get("error"), "is_error": True}
             for key in ("truncated", "output_truncated", "is_error"):
                 if key in event:
                     payload["metadata"][key] = event[key]
@@ -127,7 +137,7 @@ def main() -> int:
             if status == 0 or status >= 500:
                 enqueue_ingest(cfg, payload)
         deliver_pending_map(cfg, kind, sid)
-    elif kind in {"Stop", "SessionEnd"}:
+    elif kind in {"Stop", "SessionEnd", "Interrupt"}:
         # SessionEnd also covers print-mode errors that never emit Stop.
         http_post(cfg, "/control/agent-turn/stop", {"session_id": sid})
     return 0

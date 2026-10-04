@@ -3,8 +3,8 @@
 每个 session_id 一个子进程，内部用 asyncio.subprocess。
 崩溃自动重启（指数退避），超过 5 次放弃。
 
-默认启动真 Pi 扩展（pi_ext/dist/index.js）；若 dist 不存在则回退到
-service.pi_stub 占位实现，便于 CI / 无 Node 环境运行。可通过
+默认启动真实 Pi 扩展（pi_ext/dist/index.js）；未构建则明确报错。
+service.pi_stub 仅供测试显式选择，不作为生产兜底。可通过
 环境变量 FLYSEC_PI_COMMAND 覆盖（空格分隔）。
 """
 
@@ -118,7 +118,7 @@ class PiRunner:
     # ------------------------------------------------------------------
 
     async def dispatch(self, session_id: str, trigger: str) -> None:
-        """给对应 session 的 Pi 子进程发 run_observation。
+        """给对应 session 的 Pi 子进程发 run_curation。
 
         若子进程还没 ready，等待最多 10s；超时直接报 failed 回调。
         """
@@ -141,7 +141,7 @@ class PiRunner:
                                                              "message": "pi handle missing"}]})
             return
 
-        payload = json.dumps({"op": "run_observation", "trigger": trigger}) + "\n"
+        payload = json.dumps({"op": "run_curation", "trigger": trigger}) + "\n"
         try:
             handle.proc.stdin.write(payload.encode("utf-8"))
             await handle.proc.stdin.drain()

@@ -15,11 +15,12 @@ MARKER = "FlySecAgent Coco integration"
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("workspace", type=Path)
+    parser.add_argument("--client", choices=["coco", "traex"], default="coco")
     parser.add_argument("--data-dir", type=Path, default=Path(__file__).resolve().parent.parent / "data")
     parser.add_argument("--api-base", default="http://127.0.0.1:8787")
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
-    path = args.workspace.resolve() / ".trae" / "hooks.json"
+    path = args.workspace.resolve() / ".trae" / ("cli/hooks.json" if args.client == "traex" else "hooks.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     before = path.read_text() if path.exists() else None
     doc = json.loads(before) if before else {"hooks": {}}
@@ -27,7 +28,7 @@ def main() -> None:
     root = Path(__file__).resolve().parent.parent
     command = shlex.join([sys.executable, "-m", "hook.coco", "--data-dir", str(args.data_dir.resolve()), "--api-base", args.api_base])
     command = "cd " + shlex.quote(str(root)) + " && " + command
-    for event in EVENTS:
+    for event in (*EVENTS, "Interrupt") if args.client == "traex" else EVENTS:
         groups = [g for g in hooks.get(event, []) if g.get("description") != MARKER]
         if not args.uninstall:
             groups.append({"description": MARKER, "hooks": [{"type": "command", "command": command, "timeout": 4}]})

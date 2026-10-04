@@ -290,7 +290,7 @@ async def test_hook_pending_map_injected(live_service):
 
     import sqlite3
 
-    state_json = json.dumps({"revision": "map-rev-1", "assessments": [], "apis": []})
+    state_json = json.dumps({"schema_version":2,"revision":"map-rev-1","topics":[],"facts":[],"tests":[],"apis":[],"questions":[]})
     conn = sqlite3.connect(svc.data_dir / "flysec.db")
     try:
         cur = conn.execute(

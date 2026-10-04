@@ -1,7 +1,7 @@
 [project]
 name = "flysec"
-version = "0.1.0"
-description = "FlySecAgent 后端服务：旁路观察 Codex 授权测试过程，记录探索与 API，生成短反馈。"
+version = "0.2.1"
+description = "FlySecAgent 后端服务：面向宿主工具执行的证据记忆层：观察、测试、API 与任务摘要。"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from service import db
 
 
 def _hdr(app) -> dict[str, str]:
@@ -98,3 +99,28 @@ async def test_agent_turn_begin_409_when_disabled(client):
     )
     assert r.status_code == 409
     assert r.json()["code"] == "observation_disabled"
+
+
+@pytest.mark.asyncio
+async def test_restart_activity_is_unknown_until_a_host_event(client):
+    c,app=client;headers={'X-FlySec-Token':app.state.service_token}
+    await c.post('/hook/project.ensure',headers=headers,json={'session_id':'new-live','hint':{'target':'fixture','objective':'local'}})
+    p=(await c.get('/web/project/new-live')).json()['project']
+    assert p['agent_activity_known']==0
+    await c.post('/control/agent-turn/begin',headers=headers,json={'session_id':'new-live'})
+    p=(await c.get('/web/project/new-live')).json()['project']
+    assert p['agent_activity_known']==1 and p['agent_turn_active']==1
+
+
+@pytest.mark.asyncio
+async def test_paused_close_does_not_run_or_lose_final_request(client):
+    c,app=client;h={'X-FlySec-Token':app.state.service_token};sid='paused-final'
+    await c.post('/hook/project.ensure',headers=h,json={'session_id':sid,'hint':{'target':'fixture','objective':'local'}})
+    assert (await c.post('/control/curator.pause',headers=h,json={'session_id':sid})).json()['ok']
+    close=(await c.post('/control/observation.close',headers=h,json={'session_id':sid})).json()
+    assert close['final_summary_pending']
+    p=(await c.get('/web/project/'+sid)).json()['project']
+    assert p['observer_paused']==1 and p['observation_enabled']==0 and p['final_summary_requested']==1
+    conn=db.connect(app.state.cfg.data_dir)
+    assert conn.execute('SELECT count(*) FROM observations WHERE session_id=?',(sid,)).fetchone()[0]==0;conn.close()
+    assert (await c.post('/control/observation.open',headers=h,json={'session_id':sid})).json()['observer_paused']

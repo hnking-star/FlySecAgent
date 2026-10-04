@@ -103,7 +103,7 @@ def commit_publish(
             )
 
         obs_row = conn.execute(
-            "SELECT id, session_id, status FROM observations WHERE id = ?",
+            "SELECT id, session_id, status,trigger FROM observations WHERE id = ?",
             (obs_id,),
         ).fetchone()
         if obs_row is None:
@@ -113,6 +113,10 @@ def commit_publish(
                 f"observation {obs_id} belongs to a different session"
             )
 
+        if obs_row["status"] != "running":
+            raise RuntimeError("only a running observation can publish")
+        if obs_row["trigger"] == "observation_close":
+            conn.execute("UPDATE projects SET final_summary_requested=0 WHERE session_id=?", (session_id,))
         now = _now_iso()
         conn.execute(
             "UPDATE observations "
@@ -150,7 +154,7 @@ def commit_unchanged(
             )
 
         obs_row = conn.execute(
-            "SELECT id, session_id FROM observations WHERE id = ?", (obs_id,)
+            "SELECT id, session_id, status,trigger FROM observations WHERE id = ?", (obs_id,)
         ).fetchone()
         if obs_row is None:
             raise ValueError(f"observation {obs_id} not found")
@@ -159,6 +163,10 @@ def commit_unchanged(
                 f"observation {obs_id} belongs to a different session"
             )
 
+        if obs_row["status"] != "running":
+            raise RuntimeError("only a running observation can complete")
+        if obs_row["trigger"] == "observation_close":
+            conn.execute("UPDATE projects SET final_summary_requested=0 WHERE session_id=?", (session_id,))
         now = _now_iso()
         conn.execute(
             "UPDATE observations SET status = 'unchanged', finished_at = ? WHERE id = ?",
@@ -178,7 +186,7 @@ def mark_failed(
 ) -> None:
     """失败：只记 error，书签完全不动，pending_window_end 保留给下轮复用。"""
     obs_row = conn.execute(
-        "SELECT id, session_id FROM observations WHERE id = ?", (obs_id,)
+        "SELECT id, session_id, status,trigger FROM observations WHERE id = ?", (obs_id,)
     ).fetchone()
     if obs_row is None:
         raise ValueError(f"observation {obs_id} not found")

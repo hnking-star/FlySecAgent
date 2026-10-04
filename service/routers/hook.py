@@ -18,6 +18,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from ..db import connect, transaction
+from ..blackboard import prepare_state
+from ..feedback import render_digest
 from ..schemas import (
     MapAckInput,
     MapAckOutput,
@@ -181,7 +183,7 @@ async def map_pending(session_id: str, request: Request):
             return MapPendingOutput()
 
         obs = conn.execute(
-            "SELECT state_json, map_text FROM observations WHERE id = ? AND session_id = ? AND status = 'published'",
+            "SELECT state_json, map_text, end_record_id FROM observations WHERE id = ? AND session_id = ? AND status = 'published'",
             (int(current), session_id),
         ).fetchone()
         if obs is None or obs["map_text"] is None:
@@ -190,7 +192,13 @@ async def map_pending(session_id: str, request: Request):
         revision = _parse_revision(obs["state_json"])
         if not revision or obs["map_text"] == "<observer-map/>":
             return MapPendingOutput()
-        return MapPendingOutput(revision=revision, map_text=obs["map_text"])
+        state = json.loads(obs["state_json"])
+        if state.get("schema_version", 1) == 1:
+            target = conn.execute("SELECT target,objective FROM projects WHERE session_id=?", (session_id,)).fetchone()
+            digest = render_digest(prepare_state(state, target["target"]), obs["end_record_id"], target["objective"])
+        else:
+            digest = obs["map_text"]
+        return MapPendingOutput(revision=revision, map_text=digest)
     finally:
         conn.close()
 

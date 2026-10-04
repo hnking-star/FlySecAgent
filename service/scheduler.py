@@ -1,4 +1,4 @@
-"""Observer 调度器：每会话一个状态机，决定何时下发触发指令给 Pi 子进程。
+"""Memory Curator 调度器：每会话一个状态机，决定何时下发触发指令给 Pi 子进程。
 
 - 5 分钟定时器仅在 agent_turn_active 期间计时
 - Stop 事件立刻排一个 agent_stop 触发
@@ -37,7 +37,7 @@ def default_timer_interval() -> float:
 class SessionState:
     session_id: str
     agent_turn_active: bool = False
-    observer_paused: bool = False
+    curator_paused: bool = False
     observation_enabled: bool = True
     pending_trigger: str | None = None
     next_timer_fire_at: float | None = None
@@ -95,7 +95,7 @@ class Scheduler:
     async def agent_turn_begin(self, session_id: str) -> None:
         async with self._lock:
             state = self._ensure(session_id)
-            if not state.observation_enabled or state.observer_paused:
+            if not state.observation_enabled or state.curator_paused:
                 return
             if state.agent_turn_active:
                 return
@@ -108,24 +108,37 @@ class Scheduler:
             state = self._ensure(session_id)
             state.agent_turn_active = False
             state.next_timer_fire_at = None
-            if state.observation_enabled and not state.observer_paused:
+            if state.observation_enabled and not state.curator_paused:
                 state.pending_trigger = "agent_stop"
             _logger.info("session=%s agent_turn_stop", session_id)
         await self._maybe_dispatch(session_id)
 
-    async def observer_paused(self, session_id: str) -> None:
+    async def curator_paused(self, session_id: str) -> None:
         async with self._lock:
             state = self._ensure(session_id)
-            state.observer_paused = True
+            state.curator_paused = True
             state.pending_trigger = None
             state.next_timer_fire_at = None
 
-    async def observer_resumed(self, session_id: str) -> None:
+    async def curator_resumed(self, session_id: str, *, agent_turn_active: bool | None = None) -> None:
         async with self._lock:
             state = self._ensure(session_id)
-            state.observer_paused = False
+            state.curator_paused = False
+            if agent_turn_active is not None:
+                state.agent_turn_active = agent_turn_active
             if state.agent_turn_active and state.observation_enabled:
                 state.next_timer_fire_at = self._clock() + self._interval
+
+    async def request_summary(self, session_id: str, trigger: str) -> None:
+        async with self._lock:
+            self._ensure(session_id).pending_trigger = trigger
+        await self._maybe_dispatch(session_id)
+
+    async def observation_opened(self, session_id: str, paused: bool) -> None:
+        async with self._lock:
+            state = self._ensure(session_id)
+            state.observation_enabled = True
+            state.curator_paused = paused
 
     async def observation_closed(self, session_id: str) -> None:
         async with self._lock:
@@ -180,7 +193,7 @@ class Scheduler:
                 return
             if state.running:
                 return
-            if state.observer_paused:
+            if state.curator_paused:
                 return
             trigger = state.pending_trigger
             if trigger is None:
@@ -219,7 +232,7 @@ class Scheduler:
                 if (
                     state.agent_turn_active
                     and state.observation_enabled
-                    and not state.observer_paused
+                    and not state.curator_paused
                     and state.next_timer_fire_at is not None
                     and now >= state.next_timer_fire_at
                 ):

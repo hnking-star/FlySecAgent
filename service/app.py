@@ -30,7 +30,7 @@ from .request_log import log_request, setup_logging
 from .scheduler import Scheduler
 
 
-VERSION = "0.1.0"
+VERSION = "0.2.1"
 
 # body 顶层不允许出现的身份字段（防越权）。
 _FORBIDDEN_IDENTITY_KEYS = {"session_id", "project_id", "sessionId", "projectId"}
@@ -39,7 +39,7 @@ _FORBIDDEN_IDENTITY_KEYS = {"session_id", "project_id", "sessionId", "projectId"
 _SERVICE_TOKEN_PREFIXES = ("/hook/", "/control/")
 
 # 需要会话级 token 的路由前缀。
-_SESSION_TOKEN_PREFIXES = ("/observer/",)
+_SESSION_TOKEN_PREFIXES = ("/memory/", "/observer/")
 
 # 不鉴权的路由。
 _PUBLIC_PATHS = {"/health", "/web/", "/web/app.js", "/web/styles.css"}
@@ -57,11 +57,11 @@ def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         # Scheduler + PiRunner 延迟到有真实请求前初始化；测试时也能用。
         async def pi_ready(sid: str, message: dict):
-            observer_sid = message.get("observer_session_id")
-            if observer_sid:
+            curator_sid = message.get("curator_session_id") or message.get("observer_session_id")
+            if curator_sid:
                 conn = connect(cfg.data_dir)
                 try:
-                    conn.execute("UPDATE projects SET observer_session_id=? WHERE session_id=?", (observer_sid, sid))
+                    conn.execute("UPDATE projects SET observer_session_id=? WHERE session_id=?", (curator_sid, sid))
                 finally:
                     conn.close()
         pi_runner = PiRunner(
@@ -84,6 +84,14 @@ def create_app(cfg=None, *, start_background: bool | None = None) -> FastAPI:
                 conn.close()
             await pi_runner.dispatch(sid, trigger)
         scheduler = Scheduler(dispatcher=dispatch)
+        conn = connect(cfg.data_dir)
+        try:
+            conn.execute("UPDATE projects SET agent_turn_active=0,agent_activity_known=0")
+            # No previous Pi process is attached to this service instance. Keep
+            # its unpublished window, but do not display a phantom running job.
+            conn.execute("UPDATE observations SET status='failed',error='Service restarted; unpublished evidence window retained',finished_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE status='running'")
+        finally:
+            conn.close()
         app.state.pi_runner = pi_runner
         app.state.scheduler = scheduler
         if start_background:
@@ -127,7 +135,7 @@ def _make_run_done_handler(app: FastAPI):
             row = conn.execute("SELECT status FROM observations WHERE session_id=? AND id=?", (session_id, obs_id)).fetchone()
             success = bool(row and row["status"] in {"published", "unchanged"})
             if not success and row and row["status"] == "running":
-                observation.mark_failed(conn, session_id, obs_id, "Observer process ended without publication")
+                observation.mark_failed(conn, session_id, obs_id, "Memory Curator process ended without publication")
         finally:
             conn.close()
         if success:
@@ -146,13 +154,18 @@ def _register_health(app: FastAPI) -> None:
 
 def _register_routers(app: FastAPI) -> None:
     """挂真正的业务 router。"""
-    from .routers import control, hook, observer, web
+    from .routers import control, hook, curator, web
 
     app.include_router(hook.router)
-    app.include_router(observer.router)
+    app.include_router(curator.router)
+    # v1 write protocol is retired; old callers receive an explicit error.
+    @app.post("/observer/context")
+    @app.post("/observer/submit")
+    async def legacy_protocol():
+        return JSONResponse({"ok": False, "code": "protocol_retired", "message": "Use curator_read / curator_commit and /memory/read /memory/commit"}, status_code=410)
     app.include_router(control.router)
     app.include_router(web.router)
-    app.state.submit_cache = observer.SubmitCache()
+    app.state.submit_cache = curator.SubmitCache()
 
 
 def _register_stubs(app: FastAPI) -> None:

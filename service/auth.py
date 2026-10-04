@@ -2,7 +2,7 @@
 
 两套 token：
 - 服务级：data/.secret 里的那个，`/hook/*` `/control/*` `/web/*` 都用它
-- 会话级：Python 内存注册表，每个 Pi 扩展进程一个，`/observer/*` 用它
+- 会话级：Python 内存注册表，每个 Pi 扩展进程一个，`/memory/*` 用它（原 `/observer/*` 仅保留退役响应）
 
 会话级 token 不落盘：服务重启后全部失效，Pi 扩展必须重新向服务申请。
 """

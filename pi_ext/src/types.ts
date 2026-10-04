@@ -1,13 +1,13 @@
 export interface RpcIn {
-  op: "run_observation" | "shutdown";
-  observer_session_id?: string;
+  op: "run_curation" | "run_observation" | "shutdown";
+  curator_session_id?: string;
   tools?: string[];
   trigger?: string;
 }
 
 export interface RpcOut {
   op: "ready" | "run_started" | "run_done" | "log";
-  observer_session_id?: string;
+  curator_session_id?: string;
   tools?: string[];
   trigger?: string;
   ok?: boolean;

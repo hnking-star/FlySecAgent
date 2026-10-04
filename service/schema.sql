@@ -1,5 +1,5 @@
 -- FlySecAgent SQLite schema.
--- 以 docs/details/02-数据库.md 为准。唯一偏差：
+-- 当前存储约定见 docs/09-memory-v2.md；仅三张表。
 -- projects.current_observation_id 不声明为外键（循环引用），由 commit_publish 程序校验。
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS projects (
   objective                    TEXT NOT NULL,
   observation_enabled          INTEGER NOT NULL DEFAULT 1,
   agent_turn_active            INTEGER NOT NULL DEFAULT 0,
-  observer_paused              INTEGER NOT NULL DEFAULT 0,
-  observer_session_id          TEXT,
+  agent_activity_known         INTEGER NOT NULL DEFAULT 0,
+  observer_paused              INTEGER NOT NULL DEFAULT 0,  -- legacy storage name: curator_paused
+  final_summary_requested      INTEGER NOT NULL DEFAULT 0,
+  observer_session_id          TEXT,                        -- legacy storage name: curator_session_id
   processed_record_id          INTEGER NOT NULL DEFAULT 0,
   pending_window_end           INTEGER,
   current_observation_id       INTEGER,         -- 无 FK；commit_publish 内部校验

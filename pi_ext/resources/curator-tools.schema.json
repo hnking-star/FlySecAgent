@@ -1,0 +1,486 @@
+{
+  "protocol": 2,
+  "curator_read": {
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "default": "summary",
+        "enum": [
+          "summary",
+          "records",
+          "record",
+          "state"
+        ],
+        "title": "Mode",
+        "type": "string"
+      },
+      "record_id": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Record Id"
+      },
+      "offset": {
+        "default": 0,
+        "minimum": 0,
+        "title": "Offset",
+        "type": "integer"
+      },
+      "length": {
+        "default": 8192,
+        "maximum": 65536,
+        "minimum": 1,
+        "title": "Length",
+        "type": "integer"
+      },
+      "after_id": {
+        "default": 0,
+        "minimum": 0,
+        "title": "After Id",
+        "type": "integer"
+      },
+      "limit": {
+        "default": 50,
+        "maximum": 100,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "topic_ids": {
+        "items": {
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        },
+        "maxItems": 16,
+        "title": "Topic Ids",
+        "type": "array"
+      }
+    },
+    "title": "MemoryReadInput",
+    "type": "object"
+  },
+  "curator_commit": {
+    "additionalProperties": false,
+    "properties": {
+      "protocol": {
+        "const": 2,
+        "default": 2,
+        "title": "Protocol",
+        "type": "integer"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Revision"
+      },
+      "unchanged_reason": {
+        "anyOf": [
+          {
+            "maxLength": 400,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Unchanged Reason"
+      },
+      "topics": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Id",
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 120,
+              "minLength": 1,
+              "title": "Title",
+              "type": "string"
+            },
+            "summary": {
+              "default": "",
+              "maxLength": 600,
+              "title": "Summary",
+              "type": "string"
+            },
+            "api_ids": {
+              "items": {
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+                "type": "string"
+              },
+              "maxItems": 512,
+              "title": "Api Ids",
+              "type": "array"
+            },
+            "origin_fact_ids": {
+              "items": {
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "title": "Origin Fact Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "title"
+          ],
+          "title": "Topic",
+          "type": "object"
+        },
+        "maxItems": 256,
+        "title": "Topics",
+        "type": "array"
+      },
+      "facts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Id",
+              "type": "string"
+            },
+            "topic_id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Topic Id",
+              "type": "string"
+            },
+            "statement": {
+              "maxLength": 1200,
+              "minLength": 1,
+              "title": "Statement",
+              "type": "string"
+            },
+            "kind": {
+              "default": "observation",
+              "enum": [
+                "observation",
+                "hypothesis"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "maxLength": 600,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "evidence_ids": {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Evidence Ids",
+              "type": "array"
+            },
+            "supersedes": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Supersedes"
+            }
+          },
+          "required": [
+            "id",
+            "topic_id",
+            "statement",
+            "evidence_ids"
+          ],
+          "title": "Fact",
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "title": "Facts",
+        "type": "array"
+      },
+      "tests": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Id",
+              "type": "string"
+            },
+            "topic_id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Topic Id",
+              "type": "string"
+            },
+            "api_ids": {
+              "items": {
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Api Ids",
+              "type": "array"
+            },
+            "action": {
+              "maxLength": 1200,
+              "minLength": 1,
+              "title": "Action",
+              "type": "string"
+            },
+            "result": {
+              "maxLength": 4000,
+              "minLength": 1,
+              "title": "Result",
+              "type": "string"
+            },
+            "execution": {
+              "enum": [
+                "completed",
+                "error",
+                "denied",
+                "interrupted",
+                "unknown"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "outcome": {
+              "enum": [
+                "supports",
+                "contradicts",
+                "inconclusive",
+                "not_evaluated"
+              ],
+              "title": "Outcome",
+              "type": "string"
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "maxLength": 600,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scope"
+            },
+            "evidence_ids": {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Evidence Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "topic_id",
+            "action",
+            "result",
+            "execution",
+            "outcome",
+            "evidence_ids"
+          ],
+          "title": "TestRecord",
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "title": "Tests",
+        "type": "array"
+      },
+      "apis": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Id",
+              "type": "string"
+            },
+            "endpoint": {
+              "maxLength": 400,
+              "pattern": "^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|UNKNOWN) \\S.*$",
+              "title": "Endpoint",
+              "type": "string"
+            },
+            "purpose": {
+              "maxLength": 400,
+              "minLength": 1,
+              "title": "Purpose",
+              "type": "string"
+            },
+            "parameters": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "maxLength": 400,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Description"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "title": "ApiParam",
+                "type": "object"
+              },
+              "maxItems": 32,
+              "title": "Parameters",
+              "type": "array"
+            },
+            "evidence_ids": {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Evidence Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "endpoint",
+            "purpose",
+            "evidence_ids"
+          ],
+          "title": "ApiEntry",
+          "type": "object"
+        },
+        "maxItems": 512,
+        "title": "Apis",
+        "type": "array"
+      },
+      "questions": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Id",
+              "type": "string"
+            },
+            "topic_id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+              "title": "Topic Id",
+              "type": "string"
+            },
+            "question": {
+              "maxLength": 600,
+              "minLength": 1,
+              "title": "Question",
+              "type": "string"
+            },
+            "api_ids": {
+              "items": {
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,79}$",
+                "type": "string"
+              },
+              "maxItems": 32,
+              "title": "Api Ids",
+              "type": "array"
+            },
+            "evidence_ids": {
+              "items": {
+                "type": "integer"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "title": "Evidence Ids",
+              "type": "array"
+            },
+            "status": {
+              "default": "open",
+              "enum": [
+                "open",
+                "resolved"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "resolution": {
+              "anyOf": [
+                {
+                  "maxLength": 600,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Resolution"
+            }
+          },
+          "required": [
+            "id",
+            "topic_id",
+            "question",
+            "evidence_ids"
+          ],
+          "title": "OpenQuestion",
+          "type": "object"
+        },
+        "maxItems": 256,
+        "title": "Questions",
+        "type": "array"
+      }
+    },
+    "required": [
+      "revision"
+    ],
+    "title": "MemoryCommitInput",
+    "type": "object"
+  }
+}

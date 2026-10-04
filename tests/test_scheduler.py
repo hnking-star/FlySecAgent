@@ -154,7 +154,7 @@ async def test_paused_cancels_pending():
         await sched.agent_turn_begin("s1")
         clock.advance(6.0)
         # 还没来得及 tick 下发前先暂停
-        await sched.observer_paused("s1")
+        await sched.curator_paused("s1")
         await _flush_ticks(0.1)
         assert dispatcher.calls == []  # pause 清掉了 pending
         state = sched.snapshot("s1")

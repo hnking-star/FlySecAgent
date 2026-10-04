@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse, PlainTextResponse
 
 from ..db import connect
 from ..report import render_report
+from ..view import memory_view
+from ..feedback import render_digest
 
 router = APIRouter(prefix="/web", tags=["web"])
 WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
@@ -52,9 +54,25 @@ async def projects(request: Request):
             "FROM projects p LEFT JOIN observations o ON o.id=p.current_observation_id "
             "ORDER BY p.created_at DESC LIMIT 200"
         ).fetchall()
-        return {"ok": True, "projects": [dict(row) for row in rows]}
+        return {"ok": True, "projects": [project_metadata(row) for row in rows]}
     finally:
         conn.close()
+
+
+def project_metadata(row):
+    value = dict(row)
+    # Existing SQLite fields and HTTP aliases stay intact for old clients.
+    value['curator_paused'] = value['observer_paused']
+    value['curator_session_id'] = value['observer_session_id']
+    return value
+
+
+def memory_view_state(state, target):
+    from ..blackboard import prepare_state
+    try:
+        return prepare_state(state, target)
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(409, {"code": "invalid_memory", "message": "Published memory has an unsupported or invalid structure"})
 
 
 def load_project(conn, session_id: str, observation_id: int | None = None):
@@ -73,6 +91,9 @@ def load_project(conn, session_id: str, observation_id: int | None = None):
         if observation is None:
             fail("observation_not_found", "published observation not found in this session")
         state = parse_json(observation["state_json"], None)
+        if not isinstance(state, dict):
+            raise HTTPException(409, {"code": "invalid_memory", "message": "Published memory is not a valid object"})
+        memory_view_state(state, project["target"])
         map_text = observation["map_text"]
     latest = conn.execute(
         "SELECT id,trigger,status,start_record_id,end_record_id,error,started_at,finished_at "
@@ -82,7 +103,7 @@ def load_project(conn, session_id: str, observation_id: int | None = None):
         "SELECT id,trigger,status,start_record_id,end_record_id,started_at,finished_at,state_json "
         "FROM observations WHERE session_id=? AND status='published' ORDER BY id DESC LIMIT 100", (session_id,)
     ).fetchall()
-    return dict(project), (dict(observation) if observation else None), state, map_text, (dict(latest) if latest else None), [
+    return project_metadata(project), (dict(observation) if observation else None), state, map_text, (dict(latest) if latest else None), [
         {**{k: row[k] for k in row.keys() if k != "state_json"}, "revision": (parse_json(row["state_json"], {}) or {}).get("revision")}
         for row in versions
     ]
@@ -96,7 +117,9 @@ async def project(session_id: str, request: Request, observation_id: int | None 
         if obs:
             obs.pop("state_json", None); obs.pop("map_text", None); obs.pop("tool_logs_json", None)
         return {"ok": True, "project": p, "observation": obs, "state": state,
-                "map_text": map_text, "latest_run": latest, "versions": versions}
+                "map_text": map_text, "latest_run": latest, "versions": versions,
+                "view": memory_view(state, p["target"]) if state else None,
+                "memory_digest": render_digest(memory_view_state(state, p["target"]), obs["end_record_id"], p["objective"]) if state and obs else None}
     finally:
         conn.close()
 
@@ -117,7 +140,7 @@ async def record(session_id: str, record_id: int, request: Request):
 
 
 @router.get("/observation/{session_id}/{observation_id}/logs")
-async def observer_logs(session_id: str, observation_id: int, request: Request):
+async def curator_logs(session_id: str, observation_id: int, request: Request):
     conn = connect(request.app.state.cfg.data_dir)
     try:
         row = conn.execute("SELECT tool_logs_json FROM observations WHERE session_id=? AND id=?", (session_id, observation_id)).fetchone()

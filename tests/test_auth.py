@@ -72,12 +72,12 @@ async def test_hook_valid_token(client):
 
 
 @pytest.mark.asyncio
-async def test_observer_requires_session_token(client):
+async def test_curator_requires_session_token(client):
     c, app = client
     # 用服务级 token 调 observer → 应 401（registry 查不到）
     token = app.state.service_token
     r = await c.post(
-        "/observer/context",
+        "/memory/read",
         headers={"X-FlySec-Token": token},
         json={"mode": "summary"},
     )
@@ -85,14 +85,14 @@ async def test_observer_requires_session_token(client):
 
 
 @pytest.mark.asyncio
-async def test_observer_valid_session_token(client):
+async def test_curator_valid_session_token(client):
     """带正确会话级 token 能过中间件。
     真实路由会走业务检查（本会话无 project → 404），说明鉴权没有拦下这条请求。
     """
     c, app = client
     token = app.state.token_registry.issue("sess-42")
     r = await c.post(
-        "/observer/context",
+        "/memory/read",
         headers={"X-FlySec-Token": token},
         json={"mode": "summary"},
     )
@@ -104,11 +104,11 @@ async def test_observer_valid_session_token(client):
 
 
 @pytest.mark.asyncio
-async def test_observer_rejects_body_session_id(client):
+async def test_curator_rejects_body_session_id(client):
     c, app = client
     token = app.state.token_registry.issue("sess-1")
     r = await c.post(
-        "/observer/submit",
+        "/memory/commit",
         headers={"X-FlySec-Token": token},
         json={"session_id": "evil", "baseRevision": None},
     )
@@ -117,11 +117,11 @@ async def test_observer_rejects_body_session_id(client):
 
 
 @pytest.mark.asyncio
-async def test_observer_rejects_body_project_id(client):
+async def test_curator_rejects_body_project_id(client):
     c, app = client
     token = app.state.token_registry.issue("sess-1")
     r = await c.post(
-        "/observer/submit",
+        "/memory/commit",
         headers={"X-FlySec-Token": token},
         json={"project_id": "any"},
     )
@@ -129,11 +129,11 @@ async def test_observer_rejects_body_project_id(client):
 
 
 @pytest.mark.asyncio
-async def test_observer_rejects_camel_case_identity(client):
+async def test_curator_rejects_camel_case_identity(client):
     c, app = client
     token = app.state.token_registry.issue("sess-1")
     r = await c.post(
-        "/observer/submit",
+        "/memory/commit",
         headers={"X-FlySec-Token": token},
         json={"sessionId": "evil"},
     )
@@ -141,11 +141,11 @@ async def test_observer_rejects_camel_case_identity(client):
 
 
 @pytest.mark.asyncio
-async def test_observer_rejects_invalid_json_body(client):
+async def test_curator_rejects_invalid_json_body(client):
     c, app = client
     token = app.state.token_registry.issue("sess-1")
     r = await c.post(
-        "/observer/submit",
+        "/memory/commit",
         headers={
             "X-FlySec-Token": token,
             "Content-Type": "application/json",
