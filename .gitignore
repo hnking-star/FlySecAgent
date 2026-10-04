@@ -28,3 +28,6 @@ pi_ext/dist/
 .trae/cli/hooks.json.flysec-backup-*
 
 docs/
+
+# Generated standalone plugin packages
+/dist/

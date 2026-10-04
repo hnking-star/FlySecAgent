@@ -1,0 +1,13 @@
+{
+  "name": "flysecagent",
+  "version": "0.2.1",
+  "description": "Collect explicitly enabled Agent tool evidence, discover API metadata, preserve test history and return concise task memory.",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "FlySecAgent",
+    "shortDescription": "API 台账与工具执行记忆",
+    "longDescription": "通过被信任的本地 Hook 整理显式启用会话的工具记录，不执行目标测试。需要本机 Python、Node 和配置的整理模型。",
+    "category": "Developer tools",
+    "brandColor": "#3562CA"
+  }
+}
