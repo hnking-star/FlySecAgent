@@ -1,9 +1,0 @@
-colorama
-python-dotenv
-openai
-uvicorn
-mcp-sdk
-langchain
-langchain-community
-numpy
-# 添加其他必要的依赖项

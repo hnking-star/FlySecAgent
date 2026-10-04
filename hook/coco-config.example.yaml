@@ -1,0 +1,14 @@
+# Coco / Trae CLI 0.121.1 native format. Merge into .trae/traecli.yaml.
+# Prefer: python3 -m hook.install_coco <workspace> (writes compatible hooks.json).
+# Use one form only, otherwise the same event may be delivered twice.
+hooks:
+  - type: command
+    command: 'cd /absolute/path/to/FlySecAgent && /absolute/path/to/python3 -m hook.coco --data-dir /absolute/path/to/FlySecAgent/data --api-base http://127.0.0.1:8787'
+    timeout: 4s
+    matchers:
+      - event: session_start
+      - event: user_prompt_submit
+      - event: post_tool_use
+      - event: post_tool_use_failure
+      - event: stop
+      - event: session_end

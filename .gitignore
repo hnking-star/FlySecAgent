@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# runtime data（SQLite、token、本地日志）
+data/*
+!data/.gitkeep
+
+# Pi 扩展构建产物
+pi_ext/node_modules/
+pi_ext/dist/
+
+# macOS
+.DS_Store
+
+# Development specifications are tracked; runtime evidence remains private.
+
+# Local Coco installation (absolute machine paths)
+.trae/hooks.json
+.trae/hooks.json.flysec-backup-*
+
+# Local TraeCode CLI installation (absolute machine paths)
+.trae/cli/hooks.json
+.trae/cli/hooks.json.flysec-backup-*
+
+docs/
+
+# Generated standalone plugin packages
+/dist/
